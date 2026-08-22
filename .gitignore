@@ -1,0 +1,27 @@
+# Dependencies
+node_modules
+
+# Environment variables (never commit secrets)
+.env
+.env.local
+.env.production
+.env.supabase.old
+
+# Build output
+dist
+
+# Editor/OS
+.DS_Store
+*.local
+
+# Firebase
+.firebase
+firebase-debug.log
+
+# Analysis outputs (regenerate with: cd analysis && python run_analysis.py)
+analysis/output/
+__pycache__/
+*.pyc
+
+# PWA dev-server output
+dev-dist

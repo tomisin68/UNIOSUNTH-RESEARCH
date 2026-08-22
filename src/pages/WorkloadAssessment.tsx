@@ -4,19 +4,20 @@ import ProgressBar from '../components/ProgressBar';
 import LikertItem from '../components/LikertItem';
 import { WORKLOAD_ITEMS, WORKLOAD_LABELS, WORKLOAD_SUBSCALES } from '../data/workloadItems';
 import type { WorkloadResponse } from '../types';
-import { getSession, saveSession } from '../utils/storage';
+import { useSession } from '../context/SessionContext';
 
 const STEPS = ['Demographics', 'Workload', 'IPC Scale', 'Results'];
 
 export default function WorkloadAssessment() {
   const navigate = useNavigate();
-  const session = getSession();
-  const [responses, setResponses] = useState<WorkloadResponse>(session?.workloadResponses ?? {});
+  const { session, setWorkloadResponses, hasParticipant } = useSession();
+  const [responses, setResponses] = useState<WorkloadResponse>(session.workloadResponses);
   const [showError, setShowError] = useState(false);
 
+  // The draft lives in memory only, so a reload lands here with no participant.
   useEffect(() => {
-    if (!session?.demographics?.nurseCode) navigate('/assess');
-  }, []);
+    if (!hasParticipant) navigate('/assess', { replace: true });
+  }, [hasParticipant, navigate]);
 
   const answered = Object.keys(responses).length;
   const total = WORKLOAD_ITEMS.length;
@@ -29,7 +30,7 @@ export default function WorkloadAssessment() {
 
   function handleNext() {
     if (!allAnswered) { setShowError(true); return; }
-    saveSession({ ...session, workloadResponses: responses, step: 3 });
+    setWorkloadResponses(responses);
     navigate('/assess/ipc');
   }
 

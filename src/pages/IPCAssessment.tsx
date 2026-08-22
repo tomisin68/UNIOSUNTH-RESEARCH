@@ -4,19 +4,19 @@ import ProgressBar from '../components/ProgressBar';
 import LikertItem from '../components/LikertItem';
 import { IPC_ITEMS, IPC_LABELS, IPC_SUBSCALES } from '../data/ipcItems';
 import type { IPCResponse } from '../types';
-import { getSession, saveSession } from '../utils/storage';
+import { useSession } from '../context/SessionContext';
 
 const STEPS = ['Demographics', 'Workload', 'IPC Scale', 'Results'];
 
 export default function IPCAssessment() {
   const navigate = useNavigate();
-  const session = getSession();
-  const [responses, setResponses] = useState<IPCResponse>(session?.ipcResponses ?? {});
+  const { session, setIPCResponses, hasParticipant } = useSession();
+  const [responses, setResponses] = useState<IPCResponse>(session.ipcResponses);
   const [showError, setShowError] = useState(false);
 
   useEffect(() => {
-    if (!session?.demographics?.nurseCode) navigate('/assess');
-  }, []);
+    if (!hasParticipant) navigate('/assess', { replace: true });
+  }, [hasParticipant, navigate]);
 
   const answered = Object.keys(responses).length;
   const total = IPC_ITEMS.length;
@@ -29,7 +29,7 @@ export default function IPCAssessment() {
 
   function handleNext() {
     if (!allAnswered) { setShowError(true); return; }
-    saveSession({ ...session, ipcResponses: responses, step: 4 });
+    setIPCResponses(responses);
     navigate('/assess/results');
   }
 

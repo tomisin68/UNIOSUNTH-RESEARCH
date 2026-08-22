@@ -1,10 +1,14 @@
-import { useState, useEffect } from 'react';
-import { Download, Trash2, FileText, AlertTriangle, X, ChevronRight, RefreshCw, Upload, Cloud, Loader2, WifiOff, Lock, ShieldCheck } from 'lucide-react';
-import { getAllRecords, deleteRecord, clearAllRecords, saveRecord } from '../utils/storage';
-import { exportToCSV, exportSinglePDF } from '../utils/export';
-import { syncFromCloud, flushQueue, getQueue, isSubmitted, uploadRecord, markSubmitted } from '../utils/sync';
-import { supabaseConfigured } from '../lib/supabase';
+import { useMemo, useState } from 'react';
+import {
+  Download, FileText, X, ChevronRight, Cloud, CloudOff, Loader2, Lock, EyeOff, Eye,
+  AlertTriangle, Search,
+} from 'lucide-react';
+import { exportSinglePDF } from '../utils/export';
+import { downloadDataCSV } from '../utils/report';
+import { setRecordExcluded } from '../utils/records';
+import { useRecords } from '../hooks/useRecords';
 import { isUnlocked } from '../utils/coordinator';
+import { shortWard } from '../data/wards';
 import CoordinatorModal from '../components/CoordinatorModal';
 import type { AssessmentRecord } from '../types';
 
@@ -19,16 +23,22 @@ const CAT_PILL: Record<string, string> = {
   Poor: 'bg-red-100 text-red-700',
 };
 
+function formatSubmitted(timestamp: string): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? timestamp : date.toLocaleString();
+}
+
 function DetailModal({
   record,
+  canEdit,
+  onToggleExclude,
   onClose,
 }: {
   record: AssessmentRecord;
+  canEdit: boolean;
+  onToggleExclude: (record: AssessmentRecord) => void;
   onClose: () => void;
 }) {
-  const submitted = isSubmitted(record.id);
-  const queued = getQueue().includes(record.id);
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
@@ -45,14 +55,13 @@ function DetailModal({
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
           <h3 className="font-semibold text-gray-800">Record Detail</h3>
           <div className="flex items-center gap-2">
-            {submitted && (
-              <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
-                <Cloud size={11} /> Submitted
+            {record.excluded ? (
+              <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                <EyeOff size={11} /> Excluded
               </span>
-            )}
-            {queued && !submitted && (
-              <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
-                <WifiOff size={11} /> Queued
+            ) : (
+              <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                <Cloud size={11} /> In analysis
               </span>
             )}
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
@@ -72,6 +81,7 @@ function DetailModal({
                 ['Qualification', record.demographics.qualification],
                 ['Experience', `${record.demographics.yearsExperience} yrs`],
                 ['Patient load', record.demographics.patientLoad],
+                ['Submitted', formatSubmitted(record.timestamp)],
               ].map(([k, v]) => (
                 <div key={k}>
                   <span className="text-xs text-gray-500">{k}</span>
@@ -123,89 +133,92 @@ function DetailModal({
             <FileText size={15} />
             Print Report
           </button>
+
+          {canEdit && (
+            <button
+              onClick={() => onToggleExclude(record)}
+              className="w-full border border-gray-300 text-gray-600 py-2.5 rounded-xl text-xs font-medium hover:bg-gray-50 flex items-center justify-center gap-2 touch-manipulation"
+            >
+              {record.excluded ? <Eye size={14} /> : <EyeOff size={14} />}
+              {record.excluded ? 'Restore to the analysis' : 'Exclude from the analysis'}
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-type SyncState = 'idle' | 'syncing' | 'done' | 'error';
-
 export default function DataManager() {
-  const [records, setRecords] = useState<AssessmentRecord[]>(getAllRecords);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const { all, records, loading, error, pendingWrites, fromCache, configured } = useRecords();
   const [selected, setSelected] = useState<AssessmentRecord | null>(null);
-  const [syncState, setSyncState] = useState<SyncState>('idle');
-  const [syncMsg, setSyncMsg] = useState('');
-  const [queueCount, setQueueCount] = useState(() => getQueue().length);
   const [showCoordModal, setShowCoordModal] = useState(false);
   const [unlocked, setUnlocked] = useState(() => isUnlocked());
+  const [showExcluded, setShowExcluded] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [actionError, setActionError] = useState('');
 
-  // Refresh queue count when records change
-  useEffect(() => { setQueueCount(getQueue().length); }, [records]);
+  const visible = useMemo(() => {
+    const base = showExcluded ? all : records;
+    const needle = filter.trim().toLowerCase();
+    if (!needle) return base;
+    return base.filter(r =>
+      r.demographics.nurseCode.toLowerCase().includes(needle)
+      || r.demographics.ward.toLowerCase().includes(needle)
+      || r.demographics.shift.toLowerCase().includes(needle),
+    );
+  }, [all, records, showExcluded, filter]);
 
-  function refresh() { setRecords(getAllRecords()); }
-
-  function handleDelete(id: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    deleteRecord(id);
-    if (selected?.id === id) setSelected(null);
-    refresh();
-  }
-
-  function handleClearAll() {
-    clearAllRecords();
-    setConfirmClear(false);
-    setSelected(null);
-    refresh();
-  }
-
-  async function handleSyncFromCloud() {
-    setSyncState('syncing');
-    setSyncMsg('');
+  async function handleToggleExclude(record: AssessmentRecord) {
+    setActionError('');
     try {
-      const added = await syncFromCloud();
-      refresh();
-      setSyncMsg(`Sync complete — ${added} new record${added !== 1 ? 's' : ''} downloaded`);
-      setSyncState('done');
+      await setRecordExcluded(record.id, !record.excluded);
+      setSelected(null);
     } catch (err) {
-      setSyncMsg(err instanceof Error ? err.message : 'Sync failed');
-      setSyncState('error');
+      setActionError(err instanceof Error ? err.message : 'Could not update the record');
     }
-    setTimeout(() => setSyncState('idle'), 4000);
   }
 
-  async function handleFlushQueue() {
-    setSyncState('syncing');
-    setSyncMsg('');
-    try {
-      const { uploaded, failed } = await flushQueue();
-      setQueueCount(getQueue().length);
-      setSyncMsg(`Uploaded ${uploaded} record${uploaded !== 1 ? 's' : ''}${failed ? `, ${failed} failed` : ''}`);
-      setSyncState(failed ? 'error' : 'done');
-    } catch {
-      setSyncState('error');
-      setSyncMsg('Upload failed');
-    }
-    setTimeout(() => setSyncState('idle'), 4000);
+  if (!configured) {
+    return (
+      <div className="text-center py-16 sm:py-24">
+        <AlertTriangle size={40} className="mx-auto text-red-300 mb-3" />
+        <h3 className="text-gray-600 font-medium">Study database not configured</h3>
+        <p className="text-sm text-gray-400 mt-1 max-w-sm mx-auto">
+          Add the Firebase credentials to <code>.env</code> and rebuild. Records are stored in the
+          database only — there is no local copy to fall back on.
+        </p>
+      </div>
+    );
   }
 
-  if (!records.length) {
+  if (loading) {
+    return (
+      <div className="text-center py-16 sm:py-24">
+        <Loader2 size={32} className="mx-auto text-primary-400 mb-3 animate-spin" />
+        <p className="text-sm text-gray-400">Loading records from the study database…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-16 sm:py-24">
+        <AlertTriangle size={40} className="mx-auto text-red-300 mb-3" />
+        <h3 className="text-gray-600 font-medium">Could not read the database</h3>
+        <p className="text-sm text-gray-400 mt-1">{error}</p>
+      </div>
+    );
+  }
+
+  if (!all.length) {
     return (
       <div className="text-center py-16 sm:py-24">
         <FileText size={40} className="mx-auto text-gray-300 mb-3" />
         <h3 className="text-gray-500 font-medium">No records yet</h3>
-        <p className="text-sm text-gray-400 mt-1 mb-5">Complete an assessment to see data here.</p>
-        {supabaseConfigured && (
-          <button
-            onClick={handleSyncFromCloud}
-            disabled={syncState === 'syncing'}
-            className="inline-flex items-center gap-2 bg-primary-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary-700 touch-manipulation disabled:opacity-50"
-          >
-            {syncState === 'syncing' ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-            Load from Cloud
-          </button>
-        )}
+        <p className="text-sm text-gray-400 mt-1">
+          Submitted assessments appear here the moment they reach the database.
+        </p>
       </div>
     );
   }
@@ -217,127 +230,109 @@ export default function DataManager() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-semibold text-gray-800 text-sm sm:text-base">
             Data Manager —{' '}
-            <span className="text-primary-600">{records.length} record{records.length !== 1 ? 's' : ''}</span>
+            <span className="text-primary-600">
+              {records.length} record{records.length !== 1 ? 's' : ''}
+            </span>
+            {all.length !== records.length && (
+              <span className="text-gray-400 font-normal text-xs ml-1.5">
+                ({all.length - records.length} excluded)
+              </span>
+            )}
           </h2>
           <div className="flex gap-2 flex-wrap">
             <button
-              onClick={() => exportToCSV(records)}
+              onClick={() => downloadDataCSV(showExcluded ? all : records)}
               className="bg-primary-600 text-white px-3 sm:px-4 py-2 rounded-xl text-xs font-medium flex items-center gap-1.5 hover:bg-primary-700 active:bg-primary-800 touch-manipulation"
             >
               <Download size={14} />
               Export CSV
             </button>
-
-            {!confirmClear ? (
-              <button
-                onClick={() => setConfirmClear(true)}
-                className="border border-red-300 text-red-600 px-3 sm:px-4 py-2 rounded-xl text-xs font-medium flex items-center gap-1.5 hover:bg-red-50 touch-manipulation"
-              >
-                <Trash2 size={14} />
-                Clear All
-              </button>
-            ) : (
-              <div className="flex gap-2 items-center bg-red-50 border border-red-300 rounded-xl px-3 py-2">
-                <AlertTriangle size={13} className="text-red-500 flex-shrink-0" />
-                <span className="text-xs text-red-600">Delete all?</span>
-                <button onClick={handleClearAll} className="text-xs font-bold text-red-700 hover:underline touch-manipulation">Yes</button>
-                <button onClick={() => setConfirmClear(false)} className="text-xs text-gray-500 hover:underline touch-manipulation">No</button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Cloud sync bar — coordinator PIN required */}
-        {supabaseConfigured && (
-          <div className="bg-white border border-gray-200 rounded-2xl p-3 flex flex-wrap items-center gap-3">
-            <Cloud size={16} className={`flex-shrink-0 ${unlocked ? 'text-green-500' : 'text-gray-400'}`} />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-gray-700">
-                Study Database Sync
-                {!unlocked && (
-                  <span className="ml-2 text-gray-400 font-normal">(coordinator only)</span>
-                )}
-              </p>
-              {syncMsg && (
-                <p className={`text-xs mt-0.5 ${syncState === 'error' ? 'text-red-500' : 'text-green-600'}`}>
-                  {syncMsg}
-                </p>
-              )}
-            </div>
-
-            {unlocked ? (
-              <div className="flex gap-2 flex-shrink-0">
-                {queueCount > 0 && (
-                  <button
-                    onClick={handleFlushQueue}
-                    disabled={syncState === 'syncing' || !navigator.onLine}
-                    className="flex items-center gap-1.5 bg-amber-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-600 disabled:opacity-50 touch-manipulation"
-                  >
-                    {syncState === 'syncing' ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-                    Upload {queueCount} queued
-                  </button>
-                )}
-                <button
-                  onClick={handleSyncFromCloud}
-                  disabled={syncState === 'syncing'}
-                  className="flex items-center gap-1.5 border border-primary-300 text-primary-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-primary-50 disabled:opacity-50 touch-manipulation"
-                >
-                  {syncState === 'syncing' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                  Sync from cloud
-                </button>
-              </div>
-            ) : (
+            {!unlocked && (
               <button
                 onClick={() => setShowCoordModal(true)}
-                className="flex items-center gap-1.5 border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50 touch-manipulation"
+                className="border border-gray-300 text-gray-600 px-3 sm:px-4 py-2 rounded-xl text-xs font-medium flex items-center gap-1.5 hover:bg-gray-50 touch-manipulation"
               >
-                <Lock size={12} />
+                <Lock size={13} />
                 Coordinator access
               </button>
             )}
           </div>
+        </div>
+
+        {/* Live connection state */}
+        <div className="bg-white border border-gray-200 rounded-2xl p-3 flex flex-wrap items-center gap-3">
+          {fromCache ? (
+            <CloudOff size={16} className="text-amber-500 flex-shrink-0" />
+          ) : (
+            <Cloud size={16} className="text-green-500 flex-shrink-0" />
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-gray-700">
+              {fromCache ? 'Offline — showing the last known data' : 'Live from the study database'}
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {pendingWrites
+                ? 'A submission from this device is still uploading.'
+                : 'Every record here is stored in the database; nothing is kept on this device.'}
+            </p>
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showExcluded}
+              onChange={e => setShowExcluded(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            Show excluded
+          </label>
+        </div>
+
+        {actionError && (
+          <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+            {actionError}
+          </p>
         )}
+
+        {/* Filter */}
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            placeholder="Filter by code, ward or shift…"
+            className="w-full border border-gray-300 rounded-xl pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-400"
+          />
+        </div>
 
         {/* ── Mobile card list ──────────────────────── */}
         <div className="sm:hidden space-y-2">
-          {records.map(r => {
-            const submitted = supabaseConfigured && isSubmitted(r.id);
-            const queued = supabaseConfigured && getQueue().includes(r.id);
-            return (
-              <div
-                key={r.id}
-                onClick={() => setSelected(r)}
-                className="bg-white border border-gray-200 rounded-2xl p-4 flex items-center gap-3 active:bg-gray-50 touch-manipulation cursor-pointer"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-semibold text-sm text-gray-800">{r.demographics.nurseCode}</span>
-                    <span className="text-xs text-gray-400">{r.demographics.shift}</span>
-                    {submitted && <Cloud size={12} className="text-green-500" />}
-                    {queued && !submitted && <WifiOff size={12} className="text-amber-500" />}
-                  </div>
-                  <p className="text-xs text-gray-500 truncate mb-2">{r.demographics.ward}</p>
-                  <div className="flex gap-2 flex-wrap">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${CAT_PILL[r.workloadCategory]}`}>
-                      W: {r.workloadScore}% {r.workloadCategory}
-                    </span>
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${CAT_PILL[r.ipcCategory]}`}>
-                      IPC: {r.ipcScore}% {r.ipcCategory}
-                    </span>
-                  </div>
+          {visible.map(r => (
+            <div
+              key={r.id}
+              onClick={() => setSelected(r)}
+              className={`bg-white border rounded-2xl p-4 flex items-center gap-3 active:bg-gray-50 touch-manipulation cursor-pointer ${
+                r.excluded ? 'border-gray-200 opacity-60' : 'border-gray-200'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-semibold text-sm text-gray-800">{r.demographics.nurseCode}</span>
+                  <span className="text-xs text-gray-400">{r.demographics.shift}</span>
+                  {r.excluded && <EyeOff size={12} className="text-gray-400" />}
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  <button
-                    onClick={e => handleDelete(r.id, e)}
-                    className="p-2 text-gray-300 hover:text-red-500 active:text-red-600 transition-colors touch-manipulation"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                  <ChevronRight size={16} className="text-gray-300" />
+                <p className="text-xs text-gray-500 truncate mb-2">{r.demographics.ward}</p>
+                <div className="flex gap-2 flex-wrap">
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${CAT_PILL[r.workloadCategory]}`}>
+                    W: {r.workloadScore}% {r.workloadCategory}
+                  </span>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${CAT_PILL[r.ipcCategory]}`}>
+                    IPC: {r.ipcScore}% {r.ipcCategory}
+                  </span>
                 </div>
               </div>
-            );
-          })}
+              <ChevronRight size={16} className="text-gray-300 flex-shrink-0" />
+            </div>
+          ))}
         </div>
 
         {/* ── Desktop table ─────────────────────────── */}
@@ -345,91 +340,68 @@ export default function DataManager() {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">Code</th>
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">Ward</th>
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">Shift</th>
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">Workload</th>
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">IPC Score</th>
-                {supabaseConfigured && (
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Status</th>
-                )}
-                <th className="px-4 py-3 w-8"></th>
+                {['Code', 'Ward', 'Shift', 'Workload', 'IPC Score', 'Submitted', 'Status'].map(h => (
+                  <th key={h} className="text-left px-4 py-3 font-semibold text-gray-600">{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {records.map(r => {
-                const submitted = isSubmitted(r.id);
-                const queued = getQueue().includes(r.id);
-                return (
-                  <tr
-                    key={r.id}
-                    onClick={() => setSelected(r === selected ? null : r)}
-                    className={`border-b border-gray-100 cursor-pointer transition-colors ${
-                      r.id === selected?.id ? 'bg-primary-50' : 'hover:bg-gray-50'
-                    }`}
-                  >
-                    <td className="px-4 py-3 font-semibold text-gray-800">{r.demographics.nurseCode}</td>
-                    <td className="px-4 py-3 text-gray-600 max-w-32 truncate">
-                      {r.demographics.ward.replace(' Ward', '').replace(' Unit', '')}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{r.demographics.shift}</td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded-full font-medium ${CAT_PILL[r.workloadCategory]}`}>
-                        {r.workloadScore}% {r.workloadCategory}
+              {visible.map(r => (
+                <tr
+                  key={r.id}
+                  onClick={() => setSelected(r === selected ? null : r)}
+                  className={`border-b border-gray-100 cursor-pointer transition-colors ${
+                    r.id === selected?.id ? 'bg-primary-50' : 'hover:bg-gray-50'
+                  } ${r.excluded ? 'opacity-55' : ''}`}
+                >
+                  <td className="px-4 py-3 font-semibold text-gray-800">{r.demographics.nurseCode}</td>
+                  <td className="px-4 py-3 text-gray-600 max-w-32 truncate">
+                    {shortWard(r.demographics.ward)}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{r.demographics.shift}</td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-0.5 rounded-full font-medium ${CAT_PILL[r.workloadCategory]}`}>
+                      {r.workloadScore}% {r.workloadCategory}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-0.5 rounded-full font-medium ${CAT_PILL[r.ipcCategory]}`}>
+                      {r.ipcScore}% {r.ipcCategory}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-400">{formatSubmitted(r.timestamp)}</td>
+                  <td className="px-4 py-3">
+                    {r.excluded ? (
+                      <span className="flex items-center gap-1 text-gray-500 font-medium">
+                        <EyeOff size={12} /> Excluded
                       </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded-full font-medium ${CAT_PILL[r.ipcCategory]}`}>
-                        {r.ipcScore}% {r.ipcCategory}
+                    ) : (
+                      <span className="flex items-center gap-1 text-green-600 font-medium">
+                        <Cloud size={12} /> In analysis
                       </span>
-                    </td>
-                    {supabaseConfigured && (
-                      <td className="px-4 py-3">
-                        {submitted ? (
-                          <span className="flex items-center gap-1 text-green-600 font-medium">
-                            <Cloud size={12} /> Submitted
-                          </span>
-                        ) : queued ? (
-                          <span className="flex items-center gap-1 text-amber-600 font-medium">
-                            <WifiOff size={12} /> Queued
-                          </span>
-                        ) : (
-                          <button
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              try {
-                                await uploadRecord(r);
-                                markSubmitted(r.id);
-                                setQueueCount(getQueue().length);
-                                refresh();
-                              } catch {
-                                // silent
-                              }
-                            }}
-                            className="text-gray-400 hover:text-primary-600 flex items-center gap-1 font-medium text-xs hover:underline touch-manipulation"
-                          >
-                            <Upload size={11} /> Submit
-                          </button>
-                        )}
-                      </td>
                     )}
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={e => handleDelete(r.id, e)}
-                        className="text-gray-300 hover:text-red-500 transition-colors touch-manipulation"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
+
+        <p className="text-[11px] text-gray-400 leading-relaxed">
+          Records are append-only: a test entry or a withdrawn participant is excluded from the
+          analysis rather than deleted, which keeps the audit trail the ethics protocol expects.
+          Excluding a record needs coordinator access.
+        </p>
       </div>
 
-      {selected && <DetailModal record={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DetailModal
+          record={selected}
+          canEdit={unlocked}
+          onToggleExclude={handleToggleExclude}
+          onClose={() => setSelected(null)}
+        />
+      )}
 
       {showCoordModal && (
         <CoordinatorModal

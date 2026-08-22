@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
-import { Activity, BarChart2, BookOpen, Database, ShieldCheck } from 'lucide-react';
-import { getAllRecords } from '../utils/storage';
+import { Activity, BarChart2, BookOpen, Database, ShieldCheck, Loader2 } from 'lucide-react';
+import { useRecords } from '../hooks/useRecords';
+import { WARDS } from '../data/wards';
 import { WORKLOAD_ITEMS, WORKLOAD_SUBSCALES } from '../data/workloadItems';
 import { IPC_ITEMS, IPC_SUBSCALES } from '../data/ipcItems';
 
@@ -8,7 +9,8 @@ const TOTAL_ITEMS = WORKLOAD_ITEMS.length + IPC_ITEMS.length;
 const TOTAL_SUBSCALES = WORKLOAD_SUBSCALES.length + IPC_SUBSCALES.length;
 
 export default function Home() {
-  const count = getAllRecords().length;
+  const { records, loading } = useRecords();
+  const count = records.length;
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -24,7 +26,8 @@ export default function Home() {
             </h2>
             <p className="text-primary-100 text-xs sm:text-sm leading-relaxed">
               A validated digital tool for assessing the relationship between nursing workload and
-              infection prevention compliance among nurses in medical wards of UNIOSUNTH.
+              infection prevention compliance among nurses across the {WARDS.length} clinical
+              areas of UNIOSUN Teaching Hospital.
             </p>
             <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mt-4">
               <Link
@@ -91,8 +94,10 @@ export default function Home() {
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <div className="bg-white border border-gray-200 rounded-xl p-3 sm:p-4 text-center">
           <Database size={18} className="mx-auto text-primary-500 mb-1.5" />
-          <p className="text-xl sm:text-2xl font-bold text-gray-800">{count}</p>
-          <p className="text-[10px] sm:text-xs text-gray-500 leading-tight">Records Collected</p>
+          <p className="text-xl sm:text-2xl font-bold text-gray-800">
+            {loading ? <Loader2 size={20} className="mx-auto animate-spin text-gray-300" /> : count}
+          </p>
+          <p className="text-[10px] sm:text-xs text-gray-500 leading-tight">Records in Database</p>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-3 sm:p-4 text-center">
           <BookOpen size={18} className="mx-auto text-teal-500 mb-1.5" />
@@ -115,9 +120,9 @@ export default function Home() {
             'Enter anonymous nurse code, ward, shift, and experience details.',
             'Nurse completes the 12-item Nursing Workload Scale (≈3 min).',
             'Nurse completes the 20-item IPC Compliance Scale (≈4 min).',
-            'Review individual scores and save the record.',
-            '"Data" tab — view, export CSV, or print individual reports.',
-            '"Analysis" tab — Spearman correlation and aggregate charts.',
+            'Review the scores and submit the record to the study database.',
+            '"Data" tab — every submitted record, live from the study database.',
+            '"Analysis" tab — full descriptive statistics, hypothesis tests, and a downloadable report.',
           ].map((step, i) => (
             <li key={i} className="flex gap-2.5 text-xs sm:text-sm text-gray-600">
               <span className="flex-shrink-0 w-5 h-5 bg-primary-100 text-primary-700 rounded-full text-xs font-bold flex items-center justify-center mt-0.5">

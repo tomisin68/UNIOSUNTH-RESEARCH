@@ -216,14 +216,35 @@ where `n` = number of items in the subscale (min score = n × 1, max score = n �
 
 ### 4.1 Descriptive Statistics
 
-For both workload and IPC scores across all participants, the tool computes:
+For both scores, each of the 7 subscales, every individual item, and the
+demographic variables (years of experience, patients per shift), the tool computes:
 
-| Statistic | Formula |
+| Statistic | Formula / definition |
 |---|---|
+| **n** | Number of valid observations |
 | **Mean** | Σxᵢ / n |
 | **Standard Deviation** | √[ Σ(xᵢ − x̄)² / (n−1) ] — sample SD |
-| **Median** | Middle value of sorted scores (average of two middle values if n is even) |
-| **Minimum / Maximum** | Lowest and highest scores in the dataset |
+| **Standard error (SEM)** | SD / √n |
+| **95% confidence interval** | x̄ ± 1.96 × SEM |
+| **Median** | 50th percentile (linear interpolation, R type 7) |
+| **Q1 / Q3 / IQR** | 25th and 75th percentiles, and their difference |
+| **Minimum / Maximum / Range** | Lowest, highest, and the spread between them |
+| **Mode** | Most frequent value |
+| **Skewness** | Adjusted Fisher–Pearson G1 — the same figure SPSS reports |
+| **Kurtosis** | Sample excess kurtosis G2 (0 = mesokurtic) |
+| **Coefficient of variation** | SD / mean, as a percentage |
+
+Frequency tables (count and percent) are produced for ward, service area, shift,
+qualification, banded experience, banded patient load, and both outcome bands.
+
+**Internal consistency.** Cronbach's alpha is computed for each instrument and each
+subscale from the item responses of this sample, after reverse keying. It is
+reported only once at least 10 records exist, below which alpha is unstable and can
+turn negative.
+
+**Distribution shape.** The D'Agostino–Pearson K² omnibus test (requires n ≥ 20)
+combines standardised skewness and kurtosis. It is what justifies reporting
+Spearman's ρ rather than Pearson's r as the primary test.
 
 ---
 
@@ -293,10 +314,68 @@ with degrees of freedom = n − 2. The two-tailed p-value is derived from the in
 
 | Chart | Type | Purpose |
 |---|---|---|
-| Scatter plot | XY scatter | Shows individual workload vs IPC pairs; dot colour = workload category |
-| Category distribution | Grouped bar | Frequency of each workload/IPC category across participants |
-| Subscale averages | Bar chart | Mean score for each of the 7 subscales |
-| Records table | Table | Raw scores and categories for each participant |
+| Records by ward | Horizontal bar | How many nurses each clinical area contributed |
+| Workload bands | Pie | Share of nurses in Low / Moderate / High / Very High |
+| IPC bands | Pie | Share of nurses in Poor / Suboptimal / Satisfactory / Optimal |
+| Subscale means | Bar chart | Mean score for each subscale of an instrument |
+| Scatter plot | XY scatter with fitted line | Individual workload vs IPC pairs; dot colour = workload band |
+| Conclusion charts | 2 pies + 1 bar | One figure per conclusion (see 4.5) |
+| Records table | Table | Raw scores and bands for each participant |
+
+---
+
+### 4.5 Inferential Tests and Hypotheses
+
+| Test | Applied to |
+|---|---|
+| **Spearman's ρ** | Workload vs IPC compliance (primary), plus workload vs patient load and both scores vs experience |
+| **Pearson's r** | Workload vs IPC, reported alongside ρ for comparison |
+| **Linear regression** | IPC regressed on workload — slope, intercept, R² |
+| **Chi-square test of independence** | Workload band × IPC band, with Cramér's V and a low-expected-count warning |
+| **Kruskal–Wallis H** | Each score across wards, service areas, shifts, and qualifications (tie-corrected) |
+
+Four hypotheses are stated and decided at α = 0.05:
+
+| | Null hypothesis (H₀) | Test |
+|---|---|---|
+| **H1** | There is no statistically significant relationship between nursing workload and IPC compliance among nurses in UNIOSUNTH | Spearman's ρ |
+| **H2** | There is no statistically significant association between the workload category of a nurse and their IPC compliance category | Chi-square |
+| **H3** | There is no statistically significant difference in nursing workload across the clinical areas of UNIOSUNTH | Kruskal–Wallis H |
+| **H4** | There is no statistically significant difference in IPC compliance across the clinical areas of UNIOSUNTH | Kruskal–Wallis H |
+
+Each is shown with its statistic, degrees of freedom, n, p-value, and an explicit
+**REJECT H₀** / **RETAIN H₀** decision. Below 10 records the decision reads
+**NOT TESTABLE** rather than reporting an unstable p-value.
+
+---
+
+### 4.6 Conclusions
+
+The analysis closes with three categorical conclusions, each carrying its own figure:
+
+| # | Answers | Figure |
+|---|---|---|
+| **1** | Objective 1 — the level of nursing workload in UNIOSUNTH | Pie of workload bands |
+| **2** | Objective 2 — the level of IPC compliance in UNIOSUNTH | Pie of compliance bands |
+| **3** | The hypothesis — whether workload relates to compliance | Bar of mean IPC within each workload band |
+
+---
+
+### 4.7 Downloading the Analysis
+
+The **Download Analysis** button on the Analysis tab produces four artefacts, all
+generated from the same computation that renders the page, so a figure on screen
+and the same figure in the thesis cannot drift apart:
+
+| Output | Contents |
+|---|---|
+| **Analysis report (print / PDF)** | The full written report, opened ready to save as PDF |
+| **Analysis report (HTML file)** | The same report as a file that also opens in Word |
+| **Statistics (CSV)** | Every table on the page as a spreadsheet, for SPSS or Excel |
+| **Raw data (CSV)** | One row per participant with every item response, plus a codebook |
+
+The charts embedded in the report are the live charts, serialised out of the page
+as SVG at the moment of download.
 
 ---
 
@@ -311,10 +390,10 @@ with degrees of freedom = n − 2. The two-tailed p-value is derived from the in
 | Styling | Tailwind CSS 3 | Utility-first responsive design |
 | Routing | React Router v6 | Client-side navigation between pages |
 | Charts | Recharts 2 | Responsive SVG-based data visualisations |
-| Cloud database | Supabase (PostgreSQL) | Remote data storage and sync |
+| Cloud database | Cloud Firestore (Firebase) | Remote data storage and sync |
 | Service worker | Workbox (via vite-plugin-pwa) | Offline caching and PWA functionality |
-| Local storage | Browser localStorage | On-device data persistence |
-| Cryptography | Web Crypto API | SHA-256 PIN hashing; random code generation |
+| Offline writes | Firestore IndexedDB cache | Holds submissions made with no connection until they sync |
+| Cryptography | Web Crypto API | PBKDF2 PIN hashing; random code generation |
 
 ### 5.2 Application Pages
 
@@ -325,10 +404,28 @@ with degrees of freedom = n − 2. The two-tailed p-value is derived from the in
 | `/assess/workload` | Workload Scale | 12 Likert items grouped by subscale |
 | `/assess/ipc` | IPC Scale | 20 Likert items grouped by subscale |
 | `/assess/results` | Results | Scores, categories, interpretation, save/submit actions |
-| `/data` | Data Manager | All local records; cloud sync (coordinator only) |
-| `/analysis` | Analysis | Descriptive stats, Spearman correlation, charts |
+| `/data` | Data Manager | Live view of every submitted record; exclusion controls (coordinator only) |
+| `/analysis` | Analysis | Full descriptive statistics, hypothesis tests, conclusions, downloads |
 
-### 5.3 Assessment Data Model
+### 5.3 Clinical Areas
+
+The intake form offers exactly the wards of UNIOSUN Teaching Hospital, grouped by
+service area. Free text is not accepted, so ward is a clean categorical variable
+for the group comparisons. Because per-ward cell counts get small quickly, the
+service area is what the ward-level hypotheses (H3, H4) are tested on.
+
+| Service area | Wards / units |
+|---|---|
+| Medical | Male Medical Ward, Female Medical Ward, Renal Unit |
+| Surgical | Male Surgical Ward, Female Surgical Ward, Orthopaedic Ward, Burns Unit |
+| Paediatric & Neonatal | Paediatric Medical Ward 1, Paediatric Medical Ward 2, Paediatric Surgical Ward, Special Care Baby Unit (SCBU) |
+| Critical & Peri-operative | Intensive Care Unit (ICU), Theatre |
+| Obstetrics & Gynaecology | Labour Ward, Post-Natal Ward, Gynaecology Ward |
+| Emergency | Accident & Emergency (A&E), Children Emergency Unit (CEU) |
+
+Defined once in `src/data/wards.ts`; `analysis/make_sample_data.py` mirrors the list.
+
+### 5.4 Assessment Data Model
 
 ```typescript
 AssessmentRecord {
@@ -353,33 +450,54 @@ AssessmentRecord {
 }
 ```
 
-### 5.4 Supabase Database Schema
+### 5.5 Firestore Database Schema
 
-```sql
-table: assessment_records
+Collection `assessment_records`, one document per completed assessment.
+**The document id is the record id**, which makes retried uploads idempotent —
+a re-submit overwrites its own document rather than creating a duplicate.
+
+```
+collection: assessment_records
+document id: <record id>
 ─────────────────────────────────────────────────────
-id                 TEXT        PRIMARY KEY
-submitted_at       TIMESTAMPTZ DEFAULT now()
-nurse_code         TEXT        NOT NULL
-ward               TEXT        NOT NULL
-shift              TEXT        NOT NULL
-qualification      TEXT        NOT NULL
-years_experience   TEXT        NOT NULL
-patient_load       TEXT        NOT NULL
-assessment_date    TEXT        NOT NULL
-workload_score     INTEGER     NOT NULL
-ipc_score          INTEGER     NOT NULL
-workload_category  TEXT        NOT NULL
-ipc_category       TEXT        NOT NULL
-subscore_workload  JSONB       NOT NULL
-subscore_ipc       JSONB       NOT NULL
-workload_responses JSONB       NOT NULL
-ipc_responses      JSONB       NOT NULL
+id                 string      == document id
+submittedAt        timestamp   server clock (serverTimestamp())
+excluded           boolean     true = flagged out of the analysis by the coordinator
+nurseCode          string
+ward               string
+shift              string      Morning | Afternoon | Night
+qualification      string      RN | BNSc | RN+BNSc | MSc | PhD
+yearsExperience    string
+patientLoad        string
+assessmentDate     string
+timestamp          string      local time the assessment was completed
+workloadScore      number      0–100
+ipcScore           number      0–100
+workloadCategory   string      Low | Moderate | High | Very High
+ipcCategory        string      Poor | Suboptimal | Satisfactory | Optimal
+subscoreWorkload   map         subscale → 0–100
+subscoreIPC        map         subscale → 0–100
+workloadResponses  map         item id → 1–5
+ipcResponses       map         item id → 1–4
 ```
 
-**Row Level Security (RLS) policies:**
-- `nurses_insert` — anonymous users can INSERT (submit assessments)
-- `coordinator_select` — anonymous users can SELECT (read all records)
+No composite indexes are required — `orderBy('submittedAt')` is served by the
+automatic single-field index.
+
+**Security rules (`firestore.rules`):** the study runs without user sign-in, so
+the rules validate the *shape* of each write rather than the identity of the
+writer.
+
+| Operation | Allowed | Condition |
+|---|---|---|
+| `read` | yes | Coordinator sync/export runs in the browser with no login |
+| `create` | valid records only | Exact field set, enumerated categories, scores 0–100, bounded map sizes, `submittedAt == request.time` |
+| `update` | idempotent re-submit only | `id` and `nurseCode` must be unchanged |
+| `delete` | never | Records are append-only |
+| any other path | never | Catch-all denies everything else |
+
+Deploy them with `firebase deploy --only firestore:rules`. Full instructions
+are in `FIREBASE_SETUP.md`.
 
 ---
 
@@ -394,9 +512,12 @@ ipc_responses      JSONB       NOT NULL
 4. Completes workload scale (≈3 min) + IPC scale (≈4 min)
 5. Views individual results
 6. Taps "Submit to Study Database"
-   ├── If online  → uploads immediately → "Submitted ✓"
-   └── If offline → queued locally → auto-uploads when online
+   ├── If online  → uploads immediately → "Saved to the study database"
+   └── If offline → held by the Firestore client → uploads by itself when online
 ```
+
+The responses exist only in memory until step 6. Closing the tab part-way through
+discards the sitting; nothing about a participant is written to the device.
 
 ### 6.2 Coordinator Workflow
 
@@ -404,15 +525,20 @@ ipc_responses      JSONB       NOT NULL
 1. Opens app on any device
 2. Goes to Data tab
 3. Taps "Coordinator access" → enters PIN
-4. Taps "Sync from Cloud" → all nurses' records downloaded
-5. Opens Analysis tab → runs correlation analysis
-6. Exports CSV for SPSS/Excel
-   OR prints individual PDF reports per nurse
+4. Every submitted record is already listed — the tab is a live view of the
+   database, so there is no sync step
+5. Opens Analysis tab → descriptive statistics, hypothesis tests, conclusions
+6. "Download Analysis" → written report (PDF/HTML), statistics CSV, or raw data CSV
+   OR prints an individual PDF report per nurse
 ```
 
-### 6.3 Offline Queue
+### 6.3 Working Offline
 
-Records that could not be submitted (no internet) are stored in `localStorage` under `uniosunth_upload_queue`. The app listens for the browser's `online` event and automatically flushes the queue when connectivity is restored. Each queued record shows a "Queued" badge in the Data Manager until uploaded.
+The study database is the only place a record is kept. There is no app-managed
+queue: a submission made with no connection is written to the Firestore client's
+own IndexedDB cache, which survives a reload and replays the write as soon as the
+device reconnects. The Results screen reports this as "Recorded — waiting for a
+connection", and the Data tab shows whether it is reading live or from cache.
 
 ### 6.4 CSV Export Columns
 
@@ -439,23 +565,25 @@ Records that could not be submitted (no internet) are stored in `localStorage` u
 
 ### 7.1 Coordinator PIN
 
-The coordinator PIN protects cloud sync and aggregate data access. It is stored as a **SHA-256 hash** in the browser's localStorage — the plain PIN is never saved anywhere.
+The coordinator PIN gates the exclusion controls and signals coordinator access. It is stored in the study database as a **salted PBKDF2-SHA256 digest** (250,000 iterations) at `config/coordinator` — the plain PIN is never saved anywhere, and because it lives in the database it is the same PIN on every device used for the study.
 
 **Process:**
 1. First use: coordinator sets a 4–8 digit PIN
-2. PIN is hashed: `SHA-256(pin)` → stored in localStorage
-3. Each unlock attempt: `SHA-256(entered_pin)` is compared to the stored hash
-4. On match: session storage flag is set — unlocked for the current browser session
-5. Closing the browser/tab automatically re-locks (session storage is cleared)
+2. A 16-byte random salt is generated; `PBKDF2(pin, salt, 250000)` → written to `config/coordinator`
+3. The rules allow that document to be created once and never updated or deleted from a client
+4. Each unlock attempt derives the digest again and compares it
+5. On match: a session storage flag is set — unlocked for the current browser tab only
+6. Closing the tab automatically re-locks (session storage is cleared)
 
-**Reset:** Delete the `uniosunth_coordinator_pin_hash` key from localStorage in browser DevTools.
+**Reset:** Delete the `config/coordinator` document in the Firebase Console; the next unlock attempt offers first-time setup again.
 
 ### 7.2 Data Privacy
 
 - No personally identifiable information (PII) is collected — only anonymous nurse codes
 - Nurse codes are randomly generated (`crypto.getRandomValues`) and not linked to any identity
-- Raw item responses are stored in Supabase for audit and re-analysis purposes
-- Supabase project is configured with RLS — no unauthenticated DELETE or UPDATE operations are permitted
+- Raw item responses are stored in Cloud Firestore for audit and re-analysis purposes
+- Firestore security rules make the collection append-only — DELETE is never permitted from the client, and UPDATE is restricted to an idempotent re-submit of the same record
+- Because the study uses no sign-in, read access is open at the rules level. Records are pseudonymised (nurse codes, no names). App Check (reCAPTCHA v3) can be enabled to restrict access to this app without adding a login — see `FIREBASE_SETUP.md`
 
 ### 7.3 Nurse Code Generation
 
@@ -504,7 +632,7 @@ The service worker (generated by Workbox) pre-caches all application assets on f
 | Navigation fallback | Serves `index.html` for all routes — SPA routing works offline |
 | Google Fonts | Cache-first with 1-year TTL (if used) |
 
-**Data persistence offline:** All assessment responses are saved to `localStorage` immediately on each interaction — if the browser crashes mid-assessment, no data is lost.
+**Data persistence offline:** Submitted records are durable — the Firestore client keeps an unsynced write in IndexedDB across reloads and uploads it on reconnect. An assessment that has not yet been submitted is held in memory only and is lost if the tab is closed, which is the deliberate trade for keeping no participant data on a shared ward device.
 
 ### 8.4 Updates
 
@@ -522,9 +650,12 @@ UNIOSUNTH-RESEARCH/
 ├── index.html                    # PWA entry point (meta tags, theme-color)
 ├── vite.config.ts                # Build config + PWA plugin + chunk splitting
 ├── tailwind.config.js            # Design system colours
-├── .env                          # Supabase credentials (not committed to git)
+├── .env                          # Firebase web config (not committed to git)
 ├── .env.example                  # Template for deployment
-├── SUPABASE_SETUP.sql            # SQL to run once in Supabase dashboard
+├── firebase.json                 # Firebase CLI config (Firestore + Hosting)
+├── firestore.rules               # Firestore security rules (deploy with the CLI)
+├── firestore.indexes.json        # Index definitions (none needed today)
+├── FIREBASE_SETUP.md             # Step-by-step Firebase setup guide
 │
 ├── public/
 │   ├── favicon.svg               # App icon (heartbeat line on blue)
@@ -543,13 +674,15 @@ UNIOSUNTH-RESEARCH/
     │   └── ipcItems.ts           # 20 CSPS items + labels + subscales + reversed flags
     │
     ├── lib/
-    │   └── supabase.ts           # Supabase client (null if env vars not set)
+    │   └── firebase.ts           # Firebase app + Firestore (null if env vars not set)
     │
     ├── utils/
     │   ├── scoring.ts            # calcWorkloadScore, calcIPCScore, categories
     │   ├── statistics.ts         # spearmanCorrelation, p-value, descriptives
-    │   ├── storage.ts            # localStorage CRUD + generateNurseCode
-    │   ├── sync.ts               # Upload, download, offline queue, auto-flush
+    │   ├── ids.ts               # generateId + generateNurseCode
+    │   ├── records.ts           # Firestore submit, live subscription, exclusion
+    │   ├── analysisModel.ts     # Every statistic the study reports, computed once
+    │   ├── report.ts            # Downloadable report, statistics CSV, data CSV
     │   ├── coordinator.ts        # PIN hash/verify, session lock/unlock
     │   └── export.ts             # CSV export, printable HTML report
     │
@@ -590,10 +723,10 @@ UNIOSUNTH-RESEARCH/
 
 | Limitation | Note |
 |---|---|
-| Browser storage limits | localStorage is limited to ~5–10 MB per origin — sufficient for thousands of records but not unlimited |
+| Unsubmitted sittings | An assessment is held in memory until it is submitted, so closing the tab part-way through loses it. This is deliberate: no participant data rests on a shared ward device |
 | No data backup | If a nurse clears their browser data before submitting, their record is lost |
-| PIN security | The coordinator PIN is stored as a hash in localStorage — if a nurse has physical access to the coordinator's device, they could clear it and reset. For higher security, use Supabase Auth |
-| Offline sync conflicts | If the same record ID is somehow submitted from two devices, the `upsert` operation will overwrite the earlier version |
+| PIN security | The coordinator PIN gates the UI only — it does not protect the database. Its digest is publicly readable, so a short numeric PIN is brute-forceable offline despite the PBKDF2 work factor. For real protection, add a coordinator login via Firebase Auth and tighten `allow read` |
+| Offline sync conflicts | If the same record ID is somehow submitted from two devices, the merged `setDoc` write will overwrite the earlier version |
 
 ### 10.3 Recommended Reporting Template
 
@@ -616,4 +749,4 @@ When reporting results from this tool in a thesis or publication:
 ---
 
 *Document generated by the UNIOSUNTH Nursing Research Tool development environment.*
-*Tool built with React 18, TypeScript, Vite, Tailwind CSS, Recharts, and Supabase.*
+*Tool built with React 18, TypeScript, Vite, Tailwind CSS, Recharts, and Firebase (Cloud Firestore).*

@@ -1,0 +1,142 @@
+rules_version = '2';
+
+// ── UNIOSUNTH Nursing Research Tool — Firestore Security Rules ────────────
+//
+// This study runs WITHOUT Firebase Authentication: nurses complete the
+// assessment anonymously on shared ward devices, so there is no sign-in step.
+// Security therefore comes from *shape validation* rather than identity:
+//
+//   • create  — allowed, but only for documents that exactly match the
+//               assessment schema below (no arbitrary writes, no junk data)
+//   • update  — allowed only as an idempotent re-submit of the same record
+//               (the id and nurse code may never change)
+//   • delete  — never allowed from the client; records are append-only so a
+//               participant's submission cannot be destroyed remotely
+//   • read    — allowed, because the coordinator's export/sync runs in the
+//               browser with no login. Data is pseudonymised (nurse codes,
+//               no names), which is what the ethics protocol assumes.
+//
+// Everything not explicitly listed here is denied by the final catch-all.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /assessment_records/{recordId} {
+
+      // Exact set of fields an assessment document may contain.
+      function hasExactSchema(d) {
+        return d.keys().hasOnly([
+          'id', 'nurseCode', 'ward', 'shift', 'qualification',
+          'yearsExperience', 'patientLoad', 'assessmentDate', 'timestamp',
+          'workloadScore', 'ipcScore', 'workloadCategory', 'ipcCategory',
+          'subscoreWorkload', 'subscoreIPC',
+          'workloadResponses', 'ipcResponses', 'excluded', 'submittedAt'
+        ]) && d.keys().hasAll([
+          'id', 'nurseCode', 'ward', 'shift', 'qualification',
+          'yearsExperience', 'patientLoad', 'assessmentDate', 'timestamp',
+          'workloadScore', 'ipcScore', 'workloadCategory', 'ipcCategory',
+          'subscoreWorkload', 'subscoreIPC',
+          'workloadResponses', 'ipcResponses', 'excluded', 'submittedAt'
+        ]);
+      }
+
+      function isShortString(v, maxLen) {
+        return v is string && v.size() > 0 && v.size() <= maxLen;
+      }
+
+      function isPercent(v) {
+        return v is number && v >= 0 && v <= 100;
+      }
+
+      function isBoundedMap(v, maxEntries) {
+        return v is map && v.size() <= maxEntries;
+      }
+
+      function hasValidDemographics(d) {
+        return isShortString(d.id, 128)
+          && isShortString(d.nurseCode, 64)
+          && isShortString(d.ward, 120)
+          && d.shift in ['Morning', 'Afternoon', 'Night']
+          && d.qualification in ['RN', 'BNSc', 'RN+BNSc', 'MSc', 'PhD']
+          && isShortString(d.yearsExperience, 32)
+          && isShortString(d.patientLoad, 32)
+          && isShortString(d.assessmentDate, 64)
+          && isShortString(d.timestamp, 64);
+      }
+
+      function hasValidScores(d) {
+        return isPercent(d.workloadScore)
+          && isPercent(d.ipcScore)
+          && d.workloadCategory in ['Low', 'Moderate', 'High', 'Very High']
+          && d.ipcCategory in ['Poor', 'Suboptimal', 'Satisfactory', 'Optimal']
+          && isBoundedMap(d.subscoreWorkload, 20)
+          && isBoundedMap(d.subscoreIPC, 20)
+          && isBoundedMap(d.workloadResponses, 100)
+          && isBoundedMap(d.ipcResponses, 100)
+          && d.excluded is bool;
+      }
+
+      function isValidRecord() {
+        let d = request.resource.data;
+        return hasExactSchema(d)
+          && hasValidDemographics(d)
+          && hasValidScores(d)
+          // The document id must equal the record id it carries.
+          && d.id == recordId
+          // submittedAt must be the server's clock, never a client value.
+          && d.submittedAt == request.time;
+      }
+
+      // Coordinator sync / export — anonymous read of pseudonymised records.
+      allow read: if true;
+
+      allow create: if isValidRecord();
+
+      // The analysis flag is the one field that may change on its own: a test
+      // entry or a withdrawn participant is excluded rather than deleted, so the
+      // record itself survives for the audit trail.
+      function isExclusionToggle() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['excluded'])
+          && request.resource.data.excluded is bool;
+      }
+
+      // Idempotent re-submit only: same record, same participant.
+      function isResubmit() {
+        return isValidRecord()
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.nurseCode == resource.data.nurseCode;
+      }
+
+      allow update: if isResubmit() || isExclusionToggle();
+
+      // Records are append-only. Removals happen in the Firebase Console.
+      allow delete: if false;
+    }
+
+    // ── Coordinator gate ──────────────────────────────────────────────
+    // A single document holding a salted PBKDF2 digest of the coordinator PIN.
+    // It is readable (verification happens in the browser) and may be created
+    // exactly once — never updated or deleted from a client — so the PIN set at
+    // the start of the study is the PIN for the study.
+    match /config/coordinator {
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasOnly(
+                      ['salt', 'hash', 'iterations', 'createdAt'])
+        && request.resource.data.salt is string
+        && request.resource.data.salt.size() == 32
+        && request.resource.data.hash is string
+        && request.resource.data.hash.size() == 64
+        && request.resource.data.iterations is int
+        && request.resource.data.iterations >= 100000
+        && request.resource.data.createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // Deny everything else outright.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

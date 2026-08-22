@@ -1,60 +1,10 @@
 import type { AssessmentRecord } from '../types';
 
-export function exportToCSV(records: AssessmentRecord[]): void {
-  if (!records.length) return;
-
-  const headers = [
-    'ID', 'Date', 'Nurse Code', 'Ward', 'Shift', 'Qualification',
-    'Years Experience', 'Patient Load',
-    'Workload Score (%)', 'Workload Category',
-    'IPC Score (%)', 'IPC Category',
-    'Workload - Physical & Task Demands (%)',
-    'Workload - Cognitive & Emotional Demands (%)',
-    'Workload - Administrative & Resource Burden (%)',
-    'IPC - Personal Protective Equipment (%)',
-    'IPC - Sharps Safety (%)',
-    'IPC - Decontamination & Waste (%)',
-    'IPC - Hand Hygiene & Cross-Infection Prevention (%)',
-  ];
-
-  const rows = records.map(r => [
-    r.id,
-    r.timestamp,
-    r.demographics.nurseCode,
-    r.demographics.ward,
-    r.demographics.shift,
-    r.demographics.qualification,
-    r.demographics.yearsExperience,
-    r.demographics.patientLoad,
-    r.workloadScore,
-    r.workloadCategory,
-    r.ipcScore,
-    r.ipcCategory,
-    r.subscoreWorkload['Physical & Task Demands'] ?? '',
-    r.subscoreWorkload['Cognitive & Emotional Demands'] ?? '',
-    r.subscoreWorkload['Administrative & Resource Burden'] ?? '',
-    r.subscoreIPC['Personal Protective Equipment'] ?? '',
-    r.subscoreIPC['Sharps Safety'] ?? '',
-    r.subscoreIPC['Decontamination & Waste'] ?? '',
-    r.subscoreIPC['Hand Hygiene & Cross-Infection Prevention'] ?? '',
-  ]);
-
-  const csv = [headers, ...rows]
-    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-    .join('\n');
-
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `UNIOSUNTH_Nursing_Data_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
+// Single-participant report. Aggregate exports live in utils/report.ts.
 
 export function exportSinglePDF(record: AssessmentRecord): void {
   // Build a printable HTML page and open print dialog
-  const html = buildReportHTML(record);
+  const html = buildParticipantReportHTML(record);
   const win = window.open('', '_blank');
   if (!win) return;
   win.document.write(html);
@@ -63,7 +13,7 @@ export function exportSinglePDF(record: AssessmentRecord): void {
   setTimeout(() => win.print(), 500);
 }
 
-function buildReportHTML(r: AssessmentRecord): string {
+function buildParticipantReportHTML(r: AssessmentRecord): string {
   const wCat = r.workloadCategory;
   const iCat = r.ipcCategory;
 

@@ -3,29 +3,26 @@ import { useNavigate } from 'react-router-dom';
 import { RefreshCw } from 'lucide-react';
 import ProgressBar from '../components/ProgressBar';
 import type { Demographics } from '../types';
-import { saveSession, getSession, generateNurseCode } from '../utils/storage';
-
-const WARDS = [
-  'Male Medical Ward', 'Female Medical Ward', 'General Ward A', 'General Ward B',
-  'Cardiology Unit', 'Endocrinology Unit', 'Gastroenterology Unit', 'Neurology Unit',
-  'Respiratory Unit', 'Other Medical Ward',
-];
+import { generateNurseCode } from '../utils/ids';
+import { useSession } from '../context/SessionContext';
+import { WARDS, WARD_GROUPS } from '../data/wards';
 
 const STEPS = ['Demographics', 'Workload', 'IPC Scale', 'Results'];
 
 export default function Demographics() {
   const navigate = useNavigate();
-  const saved = getSession()?.demographics ?? {};
+  const { session, setDemographics } = useSession();
+  const saved = session.demographics;
 
   const [form, setForm] = useState<Partial<Demographics>>({
-    // Reuse saved code if resuming, otherwise generate a new one
-    nurseCode: (saved as Partial<Demographics>).nurseCode || generateNurseCode(),
+    // Reuse the code if the coordinator stepped back, otherwise mint a new one
+    nurseCode: saved.nurseCode || generateNurseCode(),
     ward: '',
     shift: undefined,
     qualification: undefined,
     yearsExperience: '',
     patientLoad: '',
-    ...(saved as Partial<Demographics>),
+    ...saved,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -36,6 +33,7 @@ export default function Demographics() {
   function validate(): boolean {
     const e: Record<string, string> = {};
     if (!form.ward) e.ward = 'Required';
+    else if (!WARDS.some(w => w.name === form.ward)) e.ward = 'Select a ward from the list';
     if (!form.shift) e.shift = 'Required';
     if (!form.qualification) e.qualification = 'Required';
     if (!form.yearsExperience?.trim()) e.yearsExperience = 'Required';
@@ -46,7 +44,7 @@ export default function Demographics() {
 
   function handleNext() {
     if (!validate()) return;
-    saveSession({ demographics: form as Demographics, workloadResponses: {}, ipcResponses: {}, step: 2 });
+    setDemographics({ ...form, date: new Date().toISOString() });
     navigate('/assess/workload');
   }
 
@@ -129,14 +127,22 @@ export default function Demographics() {
 
           {/* Ward */}
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Ward</label>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+              Ward / Unit
+            </label>
             <select
               value={form.ward ?? ''}
               onChange={e => setForm(f => ({ ...f, ward: e.target.value }))}
               className={inputClass('ward')}
             >
               <option value="">Select ward...</option>
-              {WARDS.map(w => <option key={w} value={w}>{w}</option>)}
+              {WARD_GROUPS.map(group => (
+                <optgroup key={group} label={group}>
+                  {WARDS.filter(w => w.group === group).map(w => (
+                    <option key={w.name} value={w.name}>{w.name}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
             {errors.ward && <p className="text-xs text-red-500 mt-1">{errors.ward}</p>}
           </div>

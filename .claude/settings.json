@@ -6,7 +6,8 @@
       "Bash(npx create-vite@latest . --template react-ts)",
       "Bash(npx tsc *)",
       "Bash(node -e ' *)",
-      "Bash(npx md-to-pdf *)"
+      "Bash(npx md-to-pdf *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

@@ -7,6 +7,9 @@ export default {
         primary: {
           50: '#eff6ff',
           100: '#dbeafe',
+          200: '#bfdbfe',
+          300: '#93c5fd',
+          400: '#60a5fa',
           500: '#3b82f6',
           600: '#2563eb',
           700: '#1d4ed8',
@@ -15,6 +18,7 @@ export default {
         },
         teal: {
           50: '#f0fdfa',
+          300: '#5eead4',
           500: '#14b8a6',
           600: '#0d9488',
           700: '#0f766e',

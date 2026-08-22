@@ -35,14 +35,9 @@ export interface AssessmentRecord {
   ipcCategory: IPCCategory;
   subscoreWorkload: Record<string, number>;
   subscoreIPC: Record<string, number>;
+  /** Flagged out of the analysis (test entry, withdrawn participant). */
+  excluded?: boolean;
 }
 
 export type WorkloadCategory = 'Low' | 'Moderate' | 'High' | 'Very High';
 export type IPCCategory = 'Poor' | 'Suboptimal' | 'Satisfactory' | 'Optimal';
-
-export interface AssessmentSession {
-  demographics: Partial<Demographics>;
-  workloadResponses: WorkloadResponse;
-  ipcResponses: IPCResponse;
-  step: number;
-}
