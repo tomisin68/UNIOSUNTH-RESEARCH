@@ -93,14 +93,44 @@ export async function verifyPIN(pin: string): Promise<boolean> {
 // sessionStorage holds a single "this tab is unlocked" flag and no study data.
 // It clears when the tab closes, so a shared ward device never stays unlocked.
 
+// The header badge, the route gates and the Data page all read this flag from
+// different parts of the tree, so changes are published rather than polled —
+// unlocking on one screen updates the others in the same render.
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  listeners.forEach(fn => fn());
+}
+
+export function subscribeToUnlock(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 export function isUnlocked(): boolean {
-  return sessionStorage.getItem(UNLOCK_KEY) === '1';
+  try {
+    return sessionStorage.getItem(UNLOCK_KEY) === '1';
+  } catch {
+    // Private mode or blocked storage — treat as locked rather than throwing.
+    return false;
+  }
 }
 
 export function unlock(): void {
-  sessionStorage.setItem(UNLOCK_KEY, '1');
+  try {
+    sessionStorage.setItem(UNLOCK_KEY, '1');
+  } catch {
+    // Ignore: the gate still unlocks for this render, it just will not survive
+    // a reload when storage is unavailable.
+  }
+  notify();
 }
 
 export function lock(): void {
-  sessionStorage.removeItem(UNLOCK_KEY);
+  try {
+    sessionStorage.removeItem(UNLOCK_KEY);
+  } catch {
+    // Ignore — see unlock().
+  }
+  notify();
 }

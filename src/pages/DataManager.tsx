@@ -7,7 +7,7 @@ import { exportSinglePDF } from '../utils/export';
 import { downloadDataCSV } from '../utils/report';
 import { setRecordExcluded } from '../utils/records';
 import { useRecords } from '../hooks/useRecords';
-import { isUnlocked } from '../utils/coordinator';
+import { useUnlocked } from '../hooks/useUnlocked';
 import { shortWard } from '../data/wards';
 import CoordinatorModal from '../components/CoordinatorModal';
 import type { AssessmentRecord } from '../types';
@@ -153,7 +153,7 @@ export default function DataManager() {
   const { all, records, loading, error, pendingWrites, fromCache, configured } = useRecords();
   const [selected, setSelected] = useState<AssessmentRecord | null>(null);
   const [showCoordModal, setShowCoordModal] = useState(false);
-  const [unlocked, setUnlocked] = useState(() => isUnlocked());
+  const unlocked = useUnlocked();
   const [showExcluded, setShowExcluded] = useState(false);
   const [filter, setFilter] = useState('');
   const [actionError, setActionError] = useState('');
@@ -405,7 +405,7 @@ export default function DataManager() {
 
       {showCoordModal && (
         <CoordinatorModal
-          onSuccess={() => { setUnlocked(true); setShowCoordModal(false); }}
+          onSuccess={() => setShowCoordModal(false)}
           onClose={() => setShowCoordModal(false)}
         />
       )}

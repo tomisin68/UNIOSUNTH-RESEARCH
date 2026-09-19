@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, BarChart2, Database, Home, Menu, X, ShieldCheck, Lock } from 'lucide-react';
-import { isUnlocked, lock } from '../utils/coordinator';
+import { Activity, BarChart2, Database, FileText, Home, Menu, X, ShieldCheck, Lock } from 'lucide-react';
+import { lock } from '../utils/coordinator';
+import { useUnlocked } from '../hooks/useUnlocked';
 
+// `short` keeps the five-item mobile tab bar readable at 360px.
 const navItems = [
-  { to: '/', label: 'Home', icon: Home },
-  { to: '/assess', label: 'Assess', icon: Activity },
-  { to: '/data', label: 'Data', icon: Database },
-  { to: '/analysis', label: 'Analysis', icon: BarChart2 },
+  { to: '/', label: 'Home', short: 'Home', icon: Home },
+  { to: '/assess', label: 'Assess', short: 'Assess', icon: Activity },
+  { to: '/submissions', label: 'Submissions', short: 'Entries', icon: FileText },
+  { to: '/data', label: 'Data', short: 'Data', icon: Database },
+  { to: '/analysis', label: 'Analysis', short: 'Stats', icon: BarChart2 },
 ];
 
 function isActive(to: string, pathname: string) {
@@ -17,16 +20,12 @@ function isActive(to: string, pathname: string) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [coordinatorActive, setCoordinatorActive] = useState(() => isUnlocked());
+  const unlocked = useUnlocked();
 
   function handleLock() {
     lock();
-    setCoordinatorActive(false);
     setMenuOpen(false);
   }
-
-  // Refresh coordinator state on each render (session may change)
-  const unlocked = isUnlocked();
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -139,7 +138,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         <div className="flex">
-          {navItems.map(({ to, label, icon: Icon }) => {
+          {navItems.map(({ to, short, icon: Icon }) => {
             const active = isActive(to, location.pathname);
             return (
               <Link
@@ -150,9 +149,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 }`}
               >
                 <div className={`p-1.5 rounded-xl transition-colors ${active ? 'bg-primary-100' : ''}`}>
-                  <Icon size={20} />
+                  <Icon size={19} />
                 </div>
-                <span className="text-[10px] font-medium leading-none">{label}</span>
+                <span className="text-[10px] font-medium leading-none">{short}</span>
               </Link>
             );
           })}

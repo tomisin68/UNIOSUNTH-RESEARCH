@@ -25,3 +25,5 @@ __pycache__/
 
 # PWA dev-server output
 dev-dist
+
+.vercel
