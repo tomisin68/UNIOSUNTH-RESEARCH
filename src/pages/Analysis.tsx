@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import {
   TrendingDown, TrendingUp, Minus, Loader2, AlertTriangle, Download, FileText,
-  Table2, Database, Printer, ChevronDown, Info,
+  Table2, Database, FileDown, Globe, ChevronDown, Info,
 } from 'lucide-react';
 import { useRecords } from '../hooks/useRecords';
 import { buildAnalysis, ALPHA, type AnalysisModel, type ScaleAnalysis, type HypothesisResult, type Conclusion } from '../utils/analysisModel';
@@ -14,8 +14,7 @@ import {
   type Descriptives, type FrequencyRow, type KruskalWallisResult,
 } from '../utils/statistics';
 import {
-  captureCharts, downloadAnalysisReport, printAnalysisReport,
-  downloadStatisticsCSV, downloadDataCSV,
+  downloadAnalysisReport, downloadStatisticsCSV, downloadDataCSV,
 } from '../utils/report';
 import { shortWard } from '../data/wards';
 
@@ -375,41 +374,51 @@ function ConclusionCard({ conclusion }: { conclusion: Conclusion }) {
 
 // ── Download menu ─────────────────────────────────────────────────────────
 
-function DownloadMenu({ model, getCharts, records }: {
+function DownloadMenu({ model, records }: {
   model: AnalysisModel;
-  getCharts: () => ReturnType<typeof captureCharts>;
   records: Parameters<typeof downloadDataCSV>[0];
 }) {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  function run(action: () => void, note: string) {
-    action();
+  async function run(action: () => void | Promise<void>, note: string) {
     setOpen(false);
-    setMessage(note);
-    setTimeout(() => setMessage(''), 4000);
+    setBusy(true);
+    try {
+      await action();
+      setMessage(note);
+    } catch (err) {
+      setMessage(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+      setTimeout(() => setMessage(''), 5000);
+    }
   }
 
   const items = [
     {
-      icon: Printer,
-      label: 'Analysis report (print / PDF)',
-      hint: 'Opens the full written report ready to save as PDF',
-      onClick: () => run(() => {
-        const opened = printAnalysisReport(model, getCharts());
-        if (!opened) setMessage('Allow pop-ups for this site to print the report.');
-      }, 'Report opened in a new tab.'),
+      icon: FileText,
+      label: 'Chapter Four report (Word .docx)',
+      hint: 'Results written up in the project template format, editable in Word',
+      onClick: () => run(() => downloadAnalysisReport(model, records, 'docx'), 'Word report downloaded.'),
     },
     {
-      icon: FileText,
-      label: 'Analysis report (HTML file)',
-      hint: 'Downloads the same report as a file that opens in Word',
-      onClick: () => run(() => downloadAnalysisReport(model, getCharts()), 'Report downloaded.'),
+      icon: FileDown,
+      label: 'Chapter Four report (PDF)',
+      hint: 'The same report as a print-ready PDF',
+      onClick: () => run(() => downloadAnalysisReport(model, records, 'pdf'), 'PDF report downloaded.'),
+    },
+    {
+      icon: Globe,
+      label: 'Chapter Four report (web page)',
+      hint: 'Opens in any browser; prints cleanly',
+      onClick: () => run(() => downloadAnalysisReport(model, records, 'html'), 'Report downloaded.'),
     },
     {
       icon: Table2,
       label: 'Statistics (CSV)',
-      hint: 'Every table in this page as a spreadsheet',
+      hint: 'Every table in this page as a spreadsheet; opens in Excel',
       onClick: () => run(() => downloadStatisticsCSV(model), 'Statistics downloaded.'),
     },
     {
@@ -424,10 +433,11 @@ function DownloadMenu({ model, getCharts, records }: {
     <div className="relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className="bg-primary-600 text-white px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 hover:bg-primary-700 active:bg-primary-800 touch-manipulation shadow-sm"
+        disabled={busy}
+        className="disabled:opacity-60 bg-primary-600 text-white px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 hover:bg-primary-700 active:bg-primary-800 touch-manipulation shadow-sm"
       >
-        <Download size={15} />
-        Download Analysis
+        {busy ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+        {busy ? 'Preparing…' : 'Download Analysis'}
         <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
@@ -453,7 +463,10 @@ function DownloadMenu({ model, getCharts, records }: {
       )}
 
       {message && (
-        <p className="absolute right-0 top-full mt-2 text-[11px] text-green-700 bg-green-50 border border-green-200 rounded-lg px-2.5 py-1 whitespace-nowrap">
+        <p className={`absolute right-0 top-full mt-2 text-[11px] rounded-lg px-2.5 py-1 whitespace-nowrap border ${
+          message.startsWith('Download failed')
+            ? 'text-red-700 bg-red-50 border-red-200'
+            : 'text-green-700 bg-green-50 border-green-200'}`}>
           {message}
         </p>
       )}
@@ -549,7 +562,6 @@ export default function Analysis() {
         </div>
         <DownloadMenu
           model={model}
-          getCharts={() => captureCharts(containerRef.current)}
           records={records}
         />
       </div>
