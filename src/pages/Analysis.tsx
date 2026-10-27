@@ -8,7 +8,7 @@ import {
   Table2, Database, FileDown, Globe, ChevronDown, Info,
 } from 'lucide-react';
 import { useRecords } from '../hooks/useRecords';
-import { buildAnalysis, ALPHA, type AnalysisModel, type ScaleAnalysis, type HypothesisResult, type Conclusion } from '../utils/analysisModel';
+import { buildAnalysis, ALPHA, WORKLOAD_PALETTE, IPC_PALETTE, type AnalysisModel, type ScaleAnalysis, type HypothesisResult, type Conclusion } from '../utils/analysisModel';
 import {
   formatNumber, formatP, interpretCorrelation,
   type Descriptives, type FrequencyRow, type KruskalWallisResult,
@@ -18,9 +18,10 @@ import {
 } from '../utils/report';
 import { shortWard } from '../data/wards';
 
+/** Workload level colours, for the scatter. Both scales have a "Low" level, so
+ *  pies colour by position in their own palette rather than by label. */
 const BAND_COLOR: Record<string, string> = {
-  Low: '#16a34a', Moderate: '#ca8a04', High: '#ea580c', 'Very High': '#dc2626',
-  Optimal: '#16a34a', Satisfactory: '#2563eb', Suboptimal: '#ca8a04', Poor: '#dc2626',
+  Low: WORKLOAD_PALETTE[0], Moderate: WORKLOAD_PALETTE[1], High: WORKLOAD_PALETTE[2],
 };
 
 const SECTIONS = [
@@ -176,6 +177,9 @@ function ScaleSection({ scale, id, title, subtitle, palette }: {
 }) {
   const d = scale.descriptives;
   const bandData = scale.bands.filter(b => b.count > 0);
+  const bandPalette = scale.key === 'workload' ? WORKLOAD_PALETTE : IPC_PALETTE;
+  const bandColor = (label: string) =>
+    bandPalette[scale.bands.findIndex(b => b.label === label)] ?? palette[0];
 
   return (
     <Section id={id} title={title} subtitle={subtitle}>
@@ -219,7 +223,7 @@ function ScaleSection({ scale, id, title, subtitle, palette }: {
               labelLine={false}
             >
               {bandData.map(b => (
-                <Cell key={b.label} fill={BAND_COLOR[b.label] ?? palette[0]} />
+                <Cell key={b.label} fill={bandColor(b.label)} />
               ))}
             </Pie>
             <Tooltip formatter={(v: number, n: string) => [`${v} nurses`, n]} />
@@ -315,6 +319,8 @@ function HypothesisCard({ hypothesis }: { hypothesis: HypothesisResult }) {
 
 function ConclusionCard({ conclusion }: { conclusion: Conclusion }) {
   const data = conclusion.data.filter(d => d.value > 0 || conclusion.chartType === 'bar');
+  const colorOf = (label: string) =>
+    conclusion.palette[conclusion.data.findIndex(d => d.label === label) % conclusion.palette.length];
 
   return (
     <Card className="border-l-4 border-l-primary-600">
@@ -345,8 +351,8 @@ function ConclusionCard({ conclusion }: { conclusion: Conclusion }) {
                   `${label} ${((percent ?? 0) * 100).toFixed(0)}%`}
                 labelLine={false}
               >
-                {data.map((d, i) => (
-                  <Cell key={d.label} fill={BAND_COLOR[d.label] ?? conclusion.palette[i % conclusion.palette.length]} />
+                {data.map(d => (
+                  <Cell key={d.label} fill={colorOf(d.label)} />
                 ))}
               </Pie>
               <Tooltip formatter={(v: number, n: string) => [`${v} nurses`, n]} />
@@ -358,8 +364,8 @@ function ConclusionCard({ conclusion }: { conclusion: Conclusion }) {
               <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} width={30} />
               <Tooltip formatter={(v: number, _n, p) => [`${v}%`, p?.payload?.detail ?? '']} />
               <Bar dataKey="value" name="Mean IPC %" radius={[3, 3, 0, 0]}>
-                {data.map((d, i) => (
-                  <Cell key={d.label} fill={BAND_COLOR[d.label] ?? conclusion.palette[i % conclusion.palette.length]} />
+                {data.map(d => (
+                  <Cell key={d.label} fill={colorOf(d.label)} />
                 ))}
                 <LabelList dataKey="value" position="top" style={{ fontSize: 10, fill: '#6b7280' }} />
               </Bar>

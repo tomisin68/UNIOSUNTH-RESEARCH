@@ -10,6 +10,9 @@ import {
   type KruskalWallisResult, type ChiSquareResult, type NormalityResult,
   type RegressionResult,
 } from './statistics';
+import {
+  workloadTotal, ipcTotal, getWorkloadLevel, getComplianceLevel,
+} from './scoring';
 
 // ── The study, computed once ──────────────────────────────────────────────
 // buildAnalysis() turns the record set into every number the study reports.
@@ -23,8 +26,13 @@ export const ALPHA = 0.05;
 const fmt = (value: number, dp = 1): string =>
   (Number.isFinite(value) ? value.toFixed(dp) : '—');
 
-export const WORKLOAD_BANDS = ['Low', 'Moderate', 'High', 'Very High'] as const;
-export const IPC_BANDS = ['Poor', 'Suboptimal', 'Satisfactory', 'Optimal'] as const;
+// Study levels, classified from the raw totals (see scoring.ts). These are
+// deliberately coarser than the per-nurse categories stored on each record.
+export const WORKLOAD_BANDS = ['Low', 'Moderate', 'High'] as const;
+export const IPC_BANDS = ['Low', 'High'] as const;
+
+const workloadLevelOf = (r: AssessmentRecord) => getWorkloadLevel(workloadTotal(r.workloadResponses));
+const complianceLevelOf = (r: AssessmentRecord) => getComplianceLevel(ipcTotal(r.ipcResponses));
 export const SHIFTS = ['Morning', 'Afternoon', 'Night'] as const;
 export const QUALIFICATIONS = ['RN', 'BNSc', 'RN+BNSc', 'MSc', 'PhD'] as const;
 
@@ -158,6 +166,9 @@ export interface AnalysisModel {
     ipcVsExperience: CorrelationResult;
   };
   crossTab: ChiSquareResult;
+  /** IPC compliance compared across clinical areas for H3: by service area, or by
+   *  ward when every respondent sits in one service area (a medical-wards sample). */
+  ipcByArea: { unit: 'service area' | 'ward'; result: KruskalWallisResult };
   ipcByWorkloadBand: { label: string; n: number; mean: number; sd: number }[];
   scatter: { workload: number; ipc: number; code: string; band: string; ward: string }[];
   hypotheses: HypothesisResult[];
@@ -342,7 +353,7 @@ export function buildAnalysis(
     responseRange: '1 = Not at all to 5 = Extremely',
     bands: WORKLOAD_BANDS,
     score: r => r.workloadScore,
-    band: r => r.workloadCategory,
+    band: workloadLevelOf,
     subscore: r => r.subscoreWorkload,
   });
 
@@ -355,7 +366,7 @@ export function buildAnalysis(
     responseRange: '1 = Never to 4 = Always',
     bands: IPC_BANDS,
     score: r => r.ipcScore,
-    band: r => r.ipcCategory,
+    band: complianceLevelOf,
     subscore: r => r.subscoreIPC,
   });
 
@@ -370,19 +381,23 @@ export function buildAnalysis(
     .filter(r => Number.isFinite(parseFloat(r.demographics.yearsExperience)));
 
   const crossTab = chiSquareIndependence(
-    records.map(r => r.workloadCategory),
-    records.map(r => r.ipcCategory),
+    records.map(workloadLevelOf),
+    records.map(complianceLevelOf),
     [...WORKLOAD_BANDS],
     [...IPC_BANDS],
   );
 
   const ipcByWorkloadBand = WORKLOAD_BANDS.map(band => {
-    const values = records.filter(r => r.workloadCategory === band).map(r => r.ipcScore);
+    const values = records.filter(r => workloadLevelOf(r) === band).map(r => r.ipcScore);
     return { label: band, n: values.length, mean: mean(values), sd: stdDev(values) };
   }).filter(row => row.n > 0);
 
+  const ipcByArea = ipc.byWardGroup.groups.length >= 2
+    ? { unit: 'service area' as const, result: ipc.byWardGroup }
+    : { unit: 'ward' as const, result: ipc.byWard };
+
   const hypotheses = buildHypotheses({
-    n, spearmanResult, crossTab, workload, ipc,
+    n, spearmanResult, crossTab, ipcByArea,
   });
 
   return {
@@ -429,12 +444,13 @@ export function buildAnalysis(
       ),
     },
     crossTab,
+    ipcByArea,
     ipcByWorkloadBand,
     scatter: records.map(r => ({
       workload: r.workloadScore,
       ipc: r.ipcScore,
       code: r.demographics.nurseCode,
-      band: r.workloadCategory,
+      band: workloadLevelOf(r),
       ward: r.demographics.ward,
     })),
     hypotheses,
@@ -448,10 +464,10 @@ function buildHypotheses(input: {
   n: number;
   spearmanResult: CorrelationResult;
   crossTab: ChiSquareResult;
-  workload: ScaleAnalysis;
-  ipc: ScaleAnalysis;
+  ipcByArea: AnalysisModel['ipcByArea'];
 }): HypothesisResult[] {
-  const { n, spearmanResult, crossTab, workload, ipc } = input;
+  const { n, spearmanResult, crossTab, ipcByArea } = input;
+  const area = ipcByArea.result;
 
   const primaryDecision = decide(spearmanResult.p, n, MINIMUM_N);
   const direction = spearmanResult.coefficient < 0 ? 'inverse' : 'positive';
@@ -486,10 +502,11 @@ function buildHypotheses(input: {
     {
       id: 'H2',
       nullHypothesis:
-        'There is no statistically significant association between the workload category '
-        + 'of a nurse and their IPC compliance category.',
+        'There is no statistically significant association between the level of nursing '
+        + 'workload and the level of compliance with infection prevention and control practices '
+        + 'among nurses in UNIOSUN Teaching Hospital.',
       alternativeHypothesis:
-        'Workload category and IPC compliance category are significantly associated.',
+        'The level of nursing workload and the level of IPC compliance are significantly associated.',
       test: 'Pearson chi-square test of independence',
       statisticLabel: 'chi-square',
       statistic: crossTab.chiSquare,
@@ -499,54 +516,31 @@ function buildHypotheses(input: {
       decision: decide(crossTab.p, n, MINIMUM_N),
       conclusion: decisionSentence(
         decide(crossTab.p, n, MINIMUM_N),
-        'The null hypothesis is rejected: the compliance band a nurse falls into depends on '
-        + 'their workload band.',
-        'The null hypothesis is retained: compliance band and workload band are independent '
-        + 'in this sample.',
+        'The null hypothesis is rejected: the level of compliance a nurse falls into depends on '
+        + 'their level of workload.',
+        'The null hypothesis is retained: level of compliance and level of workload are '
+        + 'independent in this sample.',
       ),
     },
     {
       id: 'H3',
       nullHypothesis:
-        'There is no statistically significant difference in nursing workload across the '
-        + 'clinical areas of UNIOSUN Teaching Hospital.',
-      alternativeHypothesis:
-        'Nursing workload differs significantly across clinical areas.',
-      test: 'Kruskal-Wallis H (by service area)',
-      statisticLabel: 'H',
-      statistic: workload.byWardGroup.h,
-      df: Number.isFinite(workload.byWardGroup.df) ? workload.byWardGroup.df : null,
-      p: workload.byWardGroup.p,
-      n: workload.byWardGroup.n,
-      decision: decide(workload.byWardGroup.p, workload.byWardGroup.n, MINIMUM_N),
-      conclusion: decisionSentence(
-        decide(workload.byWardGroup.p, workload.byWardGroup.n, MINIMUM_N),
-        'The null hypothesis is rejected: workload is not distributed evenly across the '
-        + 'service areas.',
-        'The null hypothesis is retained: workload does not differ significantly across '
-        + 'service areas.',
-      ),
-    },
-    {
-      id: 'H4',
-      nullHypothesis:
         'There is no statistically significant difference in IPC compliance across the '
         + 'clinical areas of UNIOSUN Teaching Hospital.',
       alternativeHypothesis:
         'IPC compliance differs significantly across clinical areas.',
-      test: 'Kruskal-Wallis H (by service area)',
+      test: `Kruskal-Wallis H (by ${ipcByArea.unit})`,
       statisticLabel: 'H',
-      statistic: ipc.byWardGroup.h,
-      df: Number.isFinite(ipc.byWardGroup.df) ? ipc.byWardGroup.df : null,
-      p: ipc.byWardGroup.p,
-      n: ipc.byWardGroup.n,
-      decision: decide(ipc.byWardGroup.p, ipc.byWardGroup.n, MINIMUM_N),
+      statistic: area.h,
+      df: Number.isFinite(area.df) ? area.df : null,
+      p: area.p,
+      n: area.n,
+      decision: decide(area.p, area.n, MINIMUM_N),
       conclusion: decisionSentence(
-        decide(ipc.byWardGroup.p, ipc.byWardGroup.n, MINIMUM_N),
-        'The null hypothesis is rejected: compliance varies significantly between service '
-        + 'areas, so improvement effort can be targeted.',
-        'The null hypothesis is retained: compliance is statistically comparable across '
-        + 'service areas.',
+        decide(area.p, area.n, MINIMUM_N),
+        `The null hypothesis is rejected: compliance varies significantly between ${ipcByArea.unit}s, `
+        + 'so improvement effort can be targeted.',
+        `The null hypothesis is retained: compliance is statistically comparable across ${ipcByArea.unit}s.`,
       ),
     },
   ];
@@ -556,8 +550,9 @@ function buildHypotheses(input: {
 
 // ── The three categorical conclusions ─────────────────────────────────────
 
-const WORKLOAD_PALETTE = ['#16a34a', '#ca8a04', '#ea580c', '#dc2626'];
-const IPC_PALETTE = ['#dc2626', '#ca8a04', '#2563eb', '#16a34a'];
+/** Colours in band order: Low, Moderate, High workload; Low, High compliance. */
+export const WORKLOAD_PALETTE = ['#16a34a', '#ca8a04', '#dc2626'];
+export const IPC_PALETTE = ['#dc2626', '#16a34a'];
 
 function buildConclusions(input: {
   n: number;
@@ -569,11 +564,11 @@ function buildConclusions(input: {
   const { n, workload, ipc, spearmanResult, ipcByWorkloadBand } = input;
 
   const highWorkloadShare = workload.bands
-    .filter(b => b.label === 'High' || b.label === 'Very High')
+    .filter(b => b.label === 'High')
     .reduce((sum, b) => sum + b.percent, 0);
 
   const adequateComplianceShare = ipc.bands
-    .filter(b => b.label === 'Satisfactory' || b.label === 'Optimal')
+    .filter(b => b.label === 'High')
     .reduce((sum, b) => sum + b.percent, 0);
 
   const decision = decide(spearmanResult.p, n, MINIMUM_N);
@@ -597,11 +592,11 @@ function buildConclusions(input: {
           + `(SD ${fmt(workload.descriptives.sd)}, median `
           + `${fmt(workload.descriptives.median)}%) on the adapted 12-item scale, an `
           + `average item response of ${fmt(workload.itemMean, 2)} out of 5. `
-          + `${fmt(highWorkloadShare)}% of nurses fall in the High or Very High bands, `
+          + `${fmt(highWorkloadShare)}% of nurses had a high level of workload, `
           + `and the heaviest subscale is `
           + `${[...workload.subscales].sort((a, b) => b.descriptives.mean - a.descriptives.mean)[0]?.name ?? '—'}.`,
       chartType: 'pie',
-      chartLabel: 'Distribution of nursing workload bands',
+      chartLabel: 'Distribution of nursing workload levels',
       data: workload.bands.map(b => ({
         label: b.label, value: b.count, detail: `${b.percent.toFixed(1)}%`,
       })),
@@ -619,11 +614,11 @@ function buildConclusions(input: {
         : `Compliance with standard precautions averaged ${fmt(ipc.descriptives.mean)}% `
           + `(SD ${fmt(ipc.descriptives.sd)}, median ${fmt(ipc.descriptives.median)}%) `
           + `on the CSPS, an average item response of ${fmt(ipc.itemMean, 2)} out of 4. `
-          + `${fmt(adequateComplianceShare)}% of nurses reached Satisfactory or Optimal `
-          + `compliance; the weakest domain is `
+          + `${fmt(adequateComplianceShare)}% of nurses had a high level of compliance; `
+          + `the weakest domain is `
           + `${[...ipc.subscales].sort((a, b) => a.descriptives.mean - b.descriptives.mean)[0]?.name ?? '—'}.`,
       chartType: 'pie',
-      chartLabel: 'Distribution of IPC compliance bands',
+      chartLabel: 'Distribution of IPC compliance levels',
       data: ipc.bands.map(b => ({
         label: b.label, value: b.count, detail: `${b.percent.toFixed(1)}%`,
       })),
@@ -650,7 +645,7 @@ function buildConclusions(input: {
           : `Spearman's rho = ${rho.toFixed(3)} (n = ${n}, p = ${spearmanResult.p.toFixed(3)}), which does not `
             + 'reach the 0.05 threshold. Workload and compliance move independently in this sample.',
       chartType: 'bar',
-      chartLabel: 'Mean IPC compliance (%) within each workload band',
+      chartLabel: 'Mean IPC compliance (%) within each workload level',
       data: ipcByWorkloadBand.map(row => ({
         label: row.label,
         value: Number.isFinite(row.mean) ? Math.round(row.mean * 10) / 10 : 0,

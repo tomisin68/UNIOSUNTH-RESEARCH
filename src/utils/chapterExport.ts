@@ -145,7 +145,7 @@ function saveBlob(filename: string, blob: Blob): void {
 
 export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
   const {
-    Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
+    Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, PageBreak,
     AlignmentType, WidthType, BorderStyle, LineRuleType,
   } = await import('docx');
 
@@ -160,8 +160,10 @@ export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
 
   const toTable = (block: Extract<ChapterBlock, { kind: 'table' }>) => {
     const cellPara = (text: string, bold: boolean) => new Paragraph({
-      spacing: { before: 40, after: 40, line: 276, lineRule: LineRuleType.AUTO },
-      children: [body(text, { bold, size: 22 })],
+      spacing: block.compact
+        ? { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO }
+        : { before: 40, after: 40, line: 276, lineRule: LineRuleType.AUTO },
+      children: [body(text, { bold, size: block.compact ? 18 : 22 })],
     });
     const header = new TableRow({
       tableHeader: true,
@@ -223,6 +225,9 @@ export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
           }));
         }
         children.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
+        break;
+      case 'pageBreak':
+        children.push(new Paragraph({ children: [new PageBreak()] }));
         break;
       case 'figure': {
         const png = renderPiePNG(block.slices, block.legendTitle);
@@ -348,8 +353,8 @@ export async function downloadChapterPdf(chapter: ChapterFour): Promise<void> {
           }))),
           theme: 'grid',
           styles: {
-            font: 'times', fontSize: 10, textColor: 20, lineColor: 0, lineWidth: 0.2,
-            cellPadding: 1.6, valign: 'top',
+            font: 'times', fontSize: block.compact ? 9 : 10, textColor: 20, lineColor: 0, lineWidth: 0.2,
+            cellPadding: block.compact ? 0.6 : 1.6, valign: 'top',
           },
           headStyles: { fillColor: [255, 255, 255], textColor: 0, fontStyle: 'bold' },
           rowPageBreak: 'avoid',
@@ -373,6 +378,10 @@ export async function downloadChapterPdf(chapter: ChapterFour): Promise<void> {
         y += 2;
         break;
       }
+      case 'pageBreak':
+        doc.addPage();
+        y = margin;
+        break;
     }
   }
 
@@ -404,7 +413,7 @@ export function buildChapterHTML(chapter: ChapterFour): string {
       case 'paragraph':
         return `<p>${esc(block.text)}</p>`;
       case 'table':
-        return `<p class="caption">${esc(block.caption)}</p><table><thead><tr>${
+        return `<p class="caption">${esc(block.caption)}</p><table${block.compact ? ' class="compact"' : ''}><thead><tr>${
           block.headers.map(h => `<th>${esc(h)}</th>`).join('')
         }</tr></thead><tbody>${
           block.rows.map(r => `<tr>${r.map(c => `<td${c.bold ? ' class="b"' : ''}>${esc(c.text)}</td>`).join('')}</tr>`).join('')
@@ -414,6 +423,8 @@ export function buildChapterHTML(chapter: ChapterFour): string {
         return `<figure>${png ? `<img src="${png}" alt="${esc(block.caption)}">` : ''}`
           + `<figcaption>${esc(block.caption)}</figcaption></figure>`;
       }
+      case 'pageBreak':
+        return '<hr class="page-break">';
     }
   });
 
@@ -432,11 +443,14 @@ export function buildChapterHTML(chapter: ChapterFour): string {
   table { border-collapse: collapse; width: 100%; margin: 0 0 12px; font-size: 11pt; line-height: 1.3; }
   th, td { border: 1px solid #000; padding: 4px 6px; text-align: left; vertical-align: top; }
   th, td.b { font-weight: bold; }
+  table.compact { font-size: 10pt; line-height: 1.15; }
+  table.compact th, table.compact td { padding: 2px 6px; }
   .note { font-size: 10pt; font-style: italic; }
+  .page-break { border: 0; border-top: 1px dashed #999; margin: 40px 0; page-break-after: always; }
   figure { margin: 18px 0; text-align: center; page-break-inside: avoid; }
   figure img { max-width: 100%; }
   figcaption { font-weight: bold; text-align: left; margin-top: 8px; }
-  @media print { body { padding: 0; max-width: none; } h2, h3, .caption { page-break-after: avoid; }
+  @media print { body { padding: 0; max-width: none; } .page-break { border: 0; margin: 0; } h2, h3, .caption { page-break-after: avoid; }
                  tr { page-break-inside: avoid; } }
 </style></head>
 <body>

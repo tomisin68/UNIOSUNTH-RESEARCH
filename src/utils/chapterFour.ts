@@ -3,13 +3,18 @@ import { ALPHA } from './analysisModel';
 import type { AssessmentRecord, ScaleItem } from '../types';
 import { WORKLOAD_ITEMS, WORKLOAD_LABELS, WORKLOAD_SUBSCALES } from '../data/workloadItems';
 import { IPC_ITEMS, IPC_LABELS, IPC_SUBSCALES } from '../data/ipcItems';
-import { interpretCorrelation, type FrequencyRow, type KruskalWallisResult } from './statistics';
+import { interpretCorrelation, mean, stdDev, type FrequencyRow, type KruskalWallisResult } from './statistics';
+import { WORKLOAD_LEVELS, COMPLIANCE_LEVELS, type LevelRange } from './scoring';
 
 // ── Chapter Four, as a format-neutral document ────────────────────────────
 // The project supervisor's template lays results out as a thesis chapter:
 // numbered sections, "Table 4.x" frequency tables of n (%), a paragraph of
 // interpretation under every table, pie charts of the overall levels, answers
 // to the research questions, then one table per hypothesis with its decision.
+// The supervisor's review (2026-10) added: Table 4.1 alone on the chapter's
+// first page, interpretation in the past tense, Mean and SD on the item tables,
+// three workload levels and two compliance levels with the computation shown,
+// three hypotheses, and reliability moved out of the chapter into an appendix.
 //
 // buildChapterFour() produces that chapter once as a list of blocks; the Word,
 // PDF and HTML exporters only decide how each block looks, so the three
@@ -25,8 +30,11 @@ export type ChapterBlock =
   | { kind: 'heading'; text: string }
   | { kind: 'subheading'; text: string }
   | { kind: 'paragraph'; text: string }
-  | { kind: 'table'; caption: string; headers: string[]; rows: TableCell[][]; note?: string }
-  | { kind: 'figure'; caption: string; legendTitle: string; slices: PieSlice[] };
+  | { kind: 'table'; caption: string; headers: string[]; rows: TableCell[][]; note?: string;
+      /** Tighter type and spacing, so a long table fits on one page. */
+      compact?: boolean }
+  | { kind: 'figure'; caption: string; legendTitle: string; slices: PieSlice[] }
+  | { kind: 'pageBreak' };
 
 export interface PieSlice {
   label: string;
@@ -76,6 +84,9 @@ interface ItemDistribution {
   item: ScaleItem;
   counts: number[]; // index 0 = response 1
   answered: number;
+  /** Mean and SD of the scored response (after reverse keying), from the same answers. */
+  mean: number;
+  sd: number;
 }
 
 function distributions(
@@ -86,23 +97,44 @@ function distributions(
 ): ItemDistribution[] {
   return items.map(item => {
     const counts = Array.from({ length: points }, () => 0);
-    let answered = 0;
+    const scored: number[] = [];
     for (const record of records) {
       const raw = record[key]?.[item.id];
       if (typeof raw === 'number' && raw >= 1 && raw <= points) {
         counts[raw - 1]++;
-        answered++;
+        scored.push(item.reversed ? points + 1 - raw : raw);
       }
     }
-    return { item, counts, answered };
+    return { item, counts, answered: scored.length, mean: mean(scored), sd: stdDev(scored) };
   });
+}
+
+/** Each respondent's mean item score (total ÷ number of items), complete answers only. */
+function respondentMeans(
+  records: AssessmentRecord[],
+  items: ScaleItem[],
+  key: 'workloadResponses' | 'ipcResponses',
+  points: number,
+): number[] {
+  const out: number[] = [];
+  for (const record of records) {
+    let total = 0;
+    let complete = true;
+    for (const item of items) {
+      const raw = record[key]?.[item.id];
+      if (typeof raw !== 'number' || raw < 1 || raw > points) { complete = false; break; }
+      total += item.reversed ? points + 1 - raw : raw;
+    }
+    if (complete) out.push(total / items.length);
+  }
+  return out;
 }
 
 // ── Section builders ──────────────────────────────────────────────────────
 
 function demographicsTable(model: AnalysisModel): ChapterBlock {
   const groups: [string, FrequencyRow[]][] = [
-    ['Service area', model.sample.wardGroup],
+    ['Service area', model.sample.wardGroup.filter(r => r.count > 0)],
     ['Ward / unit', model.sample.ward.filter(r => r.count > 0)],
     ['Shift', model.sample.shift],
     ['Qualification', model.sample.qualification],
@@ -122,6 +154,7 @@ function demographicsTable(model: AnalysisModel): ChapterBlock {
     caption: 'Table 4.1: Socio-demographic Characteristics of the Respondents',
     headers: ['Variables', 'Category', `Frequency (n=${model.n})`, 'Percentage (%)'],
     rows,
+    compact: true,
   };
 }
 
@@ -135,7 +168,7 @@ function demographicsNarrative(model: AnalysisModel): string {
   const load = modal(model.sample.patientLoadBand);
 
   if (area) {
-    parts.push(`It revealed that ${share(area.percent)} ${area.count} (${pct(area.percent)}%) work in the `
+    parts.push(`It revealed that ${share(area.percent)} ${area.count} (${pct(area.percent)}%) worked in the `
       + `${area.label.toLowerCase()} service area`
       + (ward ? `, and the ward with the most respondents was the ${ward.label} with ${ward.count} (${pct(ward.percent)}%).` : '.'));
   }
@@ -144,10 +177,10 @@ function demographicsNarrative(model: AnalysisModel): string {
       + `${shift.label.toLowerCase()} shift at the time of the assessment.`);
   }
   if (qual) {
-    parts.push(`${share(qual.percent).replace(/^./, c => c.toUpperCase())} ${qual.count} (${pct(qual.percent)}%) hold the ${qual.label} qualification.`);
+    parts.push(`${share(qual.percent).replace(/^./, c => c.toUpperCase())} ${qual.count} (${pct(qual.percent)}%) held the ${qual.label} qualification.`);
   }
   if (exp) {
-    parts.push(`${exp.count} (${pct(exp.percent)}%) have ${exp.label.toLowerCase()} of working experience`
+    parts.push(`${exp.count} (${pct(exp.percent)}%) had ${exp.label.toLowerCase()} of working experience`
       + (Number.isFinite(model.sample.experience.mean)
         ? ` (mean ${num(model.sample.experience.mean)} years, SD ${num(model.sample.experience.sd)}).`
         : '.'));
@@ -159,7 +192,7 @@ function demographicsNarrative(model: AnalysisModel): string {
         : '.'));
   }
 
-  return `Table 4.1 presents the socio-demographic information of the respondents. ${parts.join(' ')}`;
+  return `Table 4.1 showed the socio-demographic information of the respondents. ${parts.join(' ')}`;
 }
 
 function itemTable(
@@ -167,21 +200,39 @@ function itemTable(
   dists: ItemDistribution[],
   labels: Record<number, string>,
   firstNumber: number,
+  overall: number[],
   markReversed: boolean,
 ): ChapterBlock {
   const points = Object.keys(labels).length;
+  const criterion = (points + 1) / 2;
+  const blank = Array.from({ length: points }, () => cell(''));
   return {
     kind: 'table',
     caption,
-    headers: ['S/N', 'Variables', ...Array.from({ length: points }, (_, i) => `${labels[i + 1]} (%)`)],
-    rows: dists.map((d, index) => [
-      cell(firstNumber + index),
-      cell(d.item.text + (markReversed && d.item.reversed ? ' *' : '')),
-      ...d.counts.map(c => cell(nPct(c, d.answered))),
-    ]),
-    note: markReversed && dists.some(d => d.item.reversed)
-      ? '* Negatively worded item: "Never" is the safe practice, and the item is reverse-scored when compliance is computed.'
-      : undefined,
+    headers: [
+      'S/N', 'Variables', ...Array.from({ length: points }, (_, i) => `${labels[i + 1]} n (%)`),
+      'Mean', 'SD',
+    ],
+    rows: [
+      ...dists.map((d, index) => [
+        cell(firstNumber + index),
+        cell(d.item.text + (markReversed && d.item.reversed ? ' *' : '')),
+        ...d.counts.map(c => cell(nPct(c, d.answered))),
+        cell(num(d.mean, 2)),
+        cell(num(d.sd, 2)),
+      ]),
+      [cell(''), cell(`Grand mean (sum of the ${dists.length} item means ÷ ${dists.length})`, true), ...blank,
+        cell(num(mean(overall), 2), true), cell(num(stdDev(overall), 2), true)],
+    ],
+    note: [
+      'Each row totals 100% of the respondents who answered the item. Mean and SD are on the '
+        + `1-${points} response scale; criterion mean = (${Array.from({ length: points }, (_, i) => i + 1).join(' + ')}) `
+        + `÷ ${points} = ${criterion.toFixed(2)}.`,
+      markReversed && dists.some(d => d.item.reversed)
+        ? '* Negatively worded item: "Never" is the safe practice, so the item was reverse-scored '
+          + '(Never = 4 ... Always = 1) before its mean was computed; a higher mean always indicates better compliance.'
+        : '',
+    ].filter(Boolean).join(' '),
   };
 }
 
@@ -194,9 +245,9 @@ function workloadNarrative(dists: ItemDistribution[]): string[] {
       .map(d => {
         const high = d.counts[3] + d.counts[4];
         const low = d.counts[0] + d.counts[1];
-        return `On the statement "${d.item.text.replace(/\.$/, '')}", ${nPct(high, d.answered).replace(')', '%)')} `
-          + `responded very much or extremely, while ${nPct(low, d.answered).replace(')', '%)')} `
-          + 'responded not at all or slightly.';
+        return `${nPct(high, d.answered).replace(')', '%)')} of the respondents rated `
+          + `"${d.item.text.replace(/\.$/, '')}" as very much or extremely, while `
+          + `${nPct(low, d.answered).replace(')', '%)')} rated it not at all or slightly (mean = ${num(d.mean, 2)}).`;
       });
     paragraphs.push(`${subscale}: ${sentences.join(' ')}`);
   }
@@ -209,7 +260,7 @@ function workloadNarrative(dists: ItemDistribution[]): string[] {
       + `rated very much or extremely by ${pct(share)}% of the respondents.`);
   }
 
-  paragraphs[0] = `Table 4.2 above presents the responses of the respondents on nursing workload. ${paragraphs[0]}`;
+  paragraphs[0] = `Table 4.2 above showed the responses of the respondents on nursing workload. ${paragraphs[0]}`;
   return paragraphs;
 }
 
@@ -224,14 +275,19 @@ function ipcNarrative(dists: ItemDistribution[], tableNumber: string): string[] 
         const phrase = verbPhrase(d.item.text);
         const subject = phrase ?? `"${d.item.text.replace(/\.$/, '')}"`;
         const p = (c: number) => nPct(c, d.answered).replace(')', '%)');
+        const m = ` (mean = ${num(d.mean, 2)})`;
         if (d.item.reversed) {
           return phrase
-            ? `${p(never)} respondents never ${subject}, which is the safe practice, while ${p(sometimes + always)} do so sometimes or always.`
-            : `For ${subject}, ${p(never)} responded never (the safe practice) and ${p(sometimes + always)} sometimes or always.`;
+            ? `${p(never)} of the respondents reported that they never ${subject}, which is the safe practice, `
+              + `while ${p(sometimes + always)} reported doing so sometimes or always${m}.`
+            : `${p(never)} of the respondents responded never (the safe practice) to ${subject}, `
+              + `while ${p(sometimes + always)} responded sometimes or always${m}.`;
         }
         return phrase
-          ? `${p(always)} respondents always ${subject}, while ${p(never + rarely)} do so rarely or never.`
-          : `For ${subject}, ${p(always)} responded always and ${p(never + rarely)} rarely or never.`;
+          ? `${p(always)} of the respondents reported that they always ${subject}, `
+            + `while ${p(never + rarely)} reported doing so rarely or never${m}.`
+          : `${p(always)} of the respondents responded always to ${subject}, `
+            + `while ${p(never + rarely)} responded rarely or never${m}.`;
       });
     paragraphs.push(`${subscale}: ${sentences.join(' ')}`);
   }
@@ -245,15 +301,27 @@ function ipcNarrative(dists: ItemDistribution[], tableNumber: string): string[] 
       + `where only ${pct(safeShare(weakest) * 100)}% of the respondents gave the safe response.`);
   }
 
-  paragraphs[0] = `Table ${tableNumber} above presents the compliance of the respondents with infection prevention `
+  paragraphs[0] = `Table ${tableNumber} above showed the compliance of the respondents with infection prevention `
     + `and control practices. ${paragraphs[0]}`;
   return paragraphs;
 }
 
-function bandSlices(scale: ScaleAnalysis, palette: string[]): PieSlice[] {
-  return scale.bands.map((b, i) => ({
-    label: b.label, count: b.count, percent: b.percent, color: palette[i % palette.length],
-  }));
+function bandSlices(scale: ScaleAnalysis, palette: string[], ranges: LevelRange<string>[]): PieSlice[] {
+  return scale.bands.map((b, i) => {
+    const range = ranges.find(r => r.label === b.label);
+    return {
+      label: range ? `${b.label} (${range.min}-${range.max})` : b.label,
+      count: b.count, percent: b.percent, color: palette[i % palette.length],
+    };
+  });
+}
+
+/** "12-28 were classified as low, 29-44 as moderate and 45-60 as high" */
+function rangeList(ranges: LevelRange<string>[]): string {
+  const parts = ranges.map((r, i) =>
+    `${r.min}-${r.max}${i === 0 ? ' were classified' : ''} as ${r.label.toLowerCase()}`);
+  const last = parts.pop();
+  return parts.length ? `${parts.join(', ')} and ${last}` : last ?? '';
 }
 
 /** "26 (21.7%) of the respondents had a low level of workload, 34 (28.3%) moderate and …" */
@@ -271,28 +339,28 @@ function bandSentence(bands: FrequencyRow[], noun: string): string {
 
 // ── Hypotheses ────────────────────────────────────────────────────────────
 
-const PLAIN_ID: Record<string, string> = { H1: 'H01', H2: 'H02', H3: 'H03', H4: 'H04' };
+const PLAIN_ID: Record<string, string> = { H1: 'H01', H2: 'H02', H3: 'H03' };
 
 function decisionText(h: HypothesisResult, statText: string, relationWord: string): string {
   if (h.decision === 'Not testable') {
-    return `This hypothesis could not be tested because fewer records have been submitted than the minimum `
-      + 'needed for a reliable test. The table will be completed automatically as more data are collected.';
+    return `This hypothesis could not be tested because fewer records had been submitted than the minimum `
+      + 'needed for a reliable test.';
   }
   return h.decision === 'Reject'
-    ? `It showed that there is a statistically significant ${relationWord} as the p-value is less than `
-      + `0.050 (${statText}). Therefore, the null hypothesis is rejected.`
-    : `It showed that there is no statistically significant ${relationWord} as the p-value is greater than `
-      + `0.050 (${statText}). Therefore, the null hypothesis is accepted.`;
+    ? `It showed that there was a statistically significant ${relationWord} as the p-value was less than `
+      + `0.050 (${statText}). Therefore, the null hypothesis was rejected.`
+    : `It showed that there was no statistically significant ${relationWord} as the p-value was greater than `
+      + `0.050 (${statText}). Therefore, the null hypothesis was accepted.`;
 }
 
-function kruskalTable(caption: string, result: KruskalWallisResult): ChapterBlock {
+function kruskalTable(caption: string, groupHeader: string, result: KruskalWallisResult): ChapterBlock {
   const statCells = [
     `H = ${num(result.h, 3)}`, `df = ${Number.isFinite(result.df) ? result.df : '-'}`, pText(result.p),
   ];
   return {
     kind: 'table',
     caption,
-    headers: ['Service area', 'n', 'Mean score (%)', 'Mean rank', 'Statistics (H, df, p)'],
+    headers: [groupHeader, 'n', 'Mean score (%)', 'Mean rank', 'Statistics (H, df, p)'],
     rows: [
       ...result.groups.map((g, i) => [
         cell(g.label), cell(g.n), cell(num(g.mean)), cell(num(g.meanRank)),
@@ -302,6 +370,33 @@ function kruskalTable(caption: string, result: KruskalWallisResult): ChapterBloc
         cell(statCells.slice(result.groups.length).join(', '), true)],
     ],
   };
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────
+
+/** "The overall level … was determined by summing …" — how each respondent was
+ *  classified, written out so the reader can redo the computation. */
+function workloadComputation(): string {
+  const items = WORKLOAD_ITEMS.length;
+  const min = WORKLOAD_LEVELS[0].min;
+  const max = WORKLOAD_LEVELS[WORKLOAD_LEVELS.length - 1].max;
+  const width = (max - min) / WORKLOAD_LEVELS.length;
+  return `The overall level of nursing workload was determined by summing each respondent's scores on the `
+    + `${items} workload items, giving a possible total of ${min} (${items} × 1) to ${max} (${items} × 5). `
+    + `The range (${max} - ${min} = ${max - min}) was divided by the ${WORKLOAD_LEVELS.length} levels to give a `
+    + `class interval of ${width}, so totals of ${rangeList(WORKLOAD_LEVELS)} workload.`;
+}
+
+function complianceComputation(): string {
+  const items = IPC_ITEMS.length;
+  const reversed = IPC_ITEMS.filter(i => i.reversed).length;
+  const min = COMPLIANCE_LEVELS[0].min;
+  const max = COMPLIANCE_LEVELS[COMPLIANCE_LEVELS.length - 1].max;
+  const cut = COMPLIANCE_LEVELS[1].min;
+  return `The overall level of compliance was determined by summing each respondent's scores on the ${items} `
+    + `items, after reverse-scoring the ${reversed} negatively worded items, giving a possible total of ${min} `
+    + `(${items} × 1) to ${max} (${items} × 4). The criterion mean of 2.50 [(1 + 2 + 3 + 4) ÷ 4] multiplied by `
+    + `the ${items} items gave a cut-off total of ${cut}, so totals of ${rangeList(COMPLIANCE_LEVELS)} compliance.`;
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────
@@ -318,15 +413,11 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
 
   add({ kind: 'chapterTitle', lines: ['CHAPTER FOUR', 'DATA ANALYSIS AND RESULTS'] });
 
-  // 4.1
+  // 4.1 — kept short so Table 4.1 fits whole on the chapter's first page.
   add({ kind: 'heading', text: '4.1 Introduction' });
-  para(`This section presents the analysis and interpretation of data collected from ${n} respondents `
-    + 'to summarize responses on socio-demographic information, nursing workload and compliance with '
-    + 'infection prevention and control (IPC) practices among nurses at UNIOSUN Teaching Hospital, Osogbo. '
-    + 'Descriptive statistics (frequencies and percentages) were used to summarize the responses, while '
-    + "Spearman's rank-order correlation, the chi-square test of independence and the Kruskal-Wallis H test "
-    + `were used to test the hypotheses at ${ALPHA} level of significance. The results are presented in `
-    + 'relation to the objectives of the study.');
+  para(`Data collected from ${n} respondents were analysed using frequencies, percentages, mean and standard `
+    + "deviation, while Spearman's rank-order correlation, the chi-square test of independence and the "
+    + `Kruskal-Wallis H test were used to test the hypotheses at ${ALPHA.toFixed(2)} level of significance.`);
 
   // 4.2
   add({ kind: 'heading', text: '4.2 Socio-demographic Characteristics' });
@@ -335,58 +426,64 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
 
   // 4.3
   add({ kind: 'heading', text: '4.3 Nursing Workload among Nurses' });
-  add(itemTable('Table 4.2: Nursing Workload of the Respondents', workloadDists, WORKLOAD_LABELS, 1, false));
+  add(itemTable('Table 4.2: Nursing Workload of the Respondents', workloadDists, WORKLOAD_LABELS, 1,
+    respondentMeans(records, WORKLOAD_ITEMS, 'workloadResponses', 5), false));
   workloadNarrative(workloadDists).forEach(para);
 
+  para(workloadComputation());
   add({
     kind: 'figure',
     caption: 'Fig 4.1: Pie Chart showing the Overall Level of Nursing Workload of the Respondents',
-    legendTitle: 'Workload level',
-    slices: bandSlices(workload, model.conclusions[0]?.palette ?? []),
+    legendTitle: 'Workload level (total score)',
+    slices: bandSlices(workload, model.conclusions[0]?.palette ?? [], WORKLOAD_LEVELS),
   });
   const wlTop = modal(workload.bands);
-  para(`Figure 4.1 above presents the overall level of workload of the respondents. It revealed that `
+  para(`Figure 4.1 above showed the overall level of workload of the respondents. It revealed that `
     + `${bandSentence(workload.bands, 'workload')}. `
-    + (wlTop ? `This shows that ${share(wlTop.percent)} ${wlTop.count} (${pct(wlTop.percent)}%) experienced a `
+    + (wlTop ? `This showed that ${share(wlTop.percent)} ${wlTop.count} (${pct(wlTop.percent)}%) experienced a `
       + `${wlTop.label.toLowerCase()} level of workload. ` : '')
-    + `The mean workload score was ${num(workload.descriptives.mean)}% (SD = ${num(workload.descriptives.sd)}).`);
+    + `The mean total workload score was ${num(workload.rawDescriptives.mean)} (SD = `
+    + `${num(workload.rawDescriptives.sd)}) out of a possible ${workload.rawMax}, a mean item score of `
+    + `${num(workload.itemMean, 2)} on the 5-point scale.`);
 
   // 4.4
   add({ kind: 'heading', text: '4.4 Compliance with Infection Prevention and Control Practices' });
   add(itemTable('Table 4.3: Compliance of the Respondents with IPC (Standard Precaution) Practices',
-    ipcDists, IPC_LABELS, WORKLOAD_ITEMS.length + 1, true));
+    ipcDists, IPC_LABELS, WORKLOAD_ITEMS.length + 1,
+    respondentMeans(records, IPC_ITEMS, 'ipcResponses', 4), true));
   ipcNarrative(ipcDists, '4.3').forEach(para);
 
+  para(complianceComputation());
   add({
     kind: 'figure',
     caption: 'Fig 4.2: Pie Chart showing the Overall Level of IPC Compliance of the Respondents',
-    legendTitle: 'Compliance level',
-    slices: bandSlices(ipc, model.conclusions[1]?.palette ?? []),
+    legendTitle: 'Compliance level (total score)',
+    slices: bandSlices(ipc, model.conclusions[1]?.palette ?? [], COMPLIANCE_LEVELS),
   });
   const ipcTop = modal(ipc.bands);
-  para(`Figure 4.2 above presents the overall level of compliance of the respondents with infection `
+  para(`Figure 4.2 above showed the overall level of compliance of the respondents with infection `
     + `prevention and control practices. It revealed that ${bandSentence(ipc.bands, 'compliance')}. `
-    + (ipcTop ? `This shows that ${share(ipcTop.percent)} ${ipcTop.count} (${pct(ipcTop.percent)}%) had a `
+    + (ipcTop ? `This showed that ${share(ipcTop.percent)} ${ipcTop.count} (${pct(ipcTop.percent)}%) had a `
       + `${ipcTop.label.toLowerCase()} level of compliance. ` : '')
-    + `The mean compliance score was ${num(ipc.descriptives.mean)}% (SD = ${num(ipc.descriptives.sd)}).`);
+    + `The mean total compliance score was ${num(ipc.rawDescriptives.mean)} (SD = `
+    + `${num(ipc.rawDescriptives.sd)}) out of a possible ${ipc.rawMax}, a mean item score of `
+    + `${num(ipc.itemMean, 2)} against the criterion mean of 2.50.`);
 
   // 4.5
   add({ kind: 'heading', text: '4.5 Answering Research Questions' });
-  const heavy = workload.bands.filter(b => b.label === 'High' || b.label === 'Very High');
-  const heavyCount = heavy.reduce((s, b) => s + b.count, 0);
+  const high = workload.bands.find(b => b.label === 'High');
   add({ kind: 'subheading', text: '1. What is the level of nursing workload among nurses in UNIOSUN Teaching Hospital?' });
-  para(`According to figure 4.1 above, which presents the overall level of workload of the respondents, `
-    + `${bandSentence(workload.bands, 'workload')}. In all, ${nPct(heavyCount, n).replace(')', '%)')} of the `
-    + 'respondents experienced a high or very high workload. '
-    + (wlTop ? `The level of nursing workload among nurses in UNIOSUN Teaching Hospital is therefore predominantly ${wlTop.label.toLowerCase()}.` : ''));
+  para(`According to figure 4.1 above, which showed the overall level of workload of the respondents, `
+    + `${bandSentence(workload.bands, 'workload')}. In all, ${nPct(high?.count ?? 0, n).replace(')', '%)')} of the `
+    + 'respondents experienced a high level of workload. '
+    + (wlTop ? `The level of nursing workload among nurses in UNIOSUN Teaching Hospital was therefore predominantly ${wlTop.label.toLowerCase()}.` : ''));
 
-  const adequate = ipc.bands.filter(b => b.label === 'Satisfactory' || b.label === 'Optimal');
-  const adequateCount = adequate.reduce((s, b) => s + b.count, 0);
+  const compliant = ipc.bands.find(b => b.label === 'High');
   add({ kind: 'subheading', text: '2. What is the level of compliance with infection prevention and control practices among nurses in UNIOSUN Teaching Hospital?' });
-  para(`According to figure 4.2 above, which presents the overall level of compliance of the respondents, `
-    + `${bandSentence(ipc.bands, 'compliance')}. In all, ${nPct(adequateCount, n).replace(')', '%)')} of the `
-    + 'respondents reached a satisfactory or optimal level of compliance. '
-    + (ipcTop ? `The level of compliance with IPC practices among nurses in UNIOSUN Teaching Hospital is therefore predominantly ${ipcTop.label.toLowerCase()}.` : ''));
+  para(`According to figure 4.2 above, which showed the overall level of compliance of the respondents, `
+    + `${bandSentence(ipc.bands, 'compliance')}. In all, ${nPct(compliant?.count ?? 0, n).replace(')', '%)')} of the `
+    + 'respondents had a high level of compliance. '
+    + (ipcTop ? `The level of compliance with IPC practices among nurses in UNIOSUN Teaching Hospital was therefore predominantly ${ipcTop.label.toLowerCase()}.` : ''));
 
   // 4.6
   add({ kind: 'heading', text: '4.6 Hypothesis Testing' });
@@ -410,12 +507,12 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
         ]],
       });
       const strength = interpretCorrelation(s.coefficient);
-      para(`${t} presents the relationship between nursing workload and compliance with infection prevention and `
+      para(`${t} showed the relationship between nursing workload and compliance with infection prevention and `
         + `control practices among the respondents. ${decisionText(h, `rs = ${num(s.coefficient, 3)}, ${pText(s.p)}`,
           'relationship between nursing workload and compliance with IPC practices')}`
         + (h.decision === 'Reject'
-          ? ` The relationship is ${strength}, meaning that compliance with IPC practices `
-            + `${s.coefficient < 0 ? 'decreases' : 'increases'} as nursing workload increases.`
+          ? ` The relationship was ${strength}, meaning that compliance with IPC practices `
+            + `${s.coefficient < 0 ? 'decreased' : 'increased'} as nursing workload increased.`
           : ''));
     } else if (h.id === 'H2') {
       const ct = model.crossTab;
@@ -425,38 +522,44 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
       add({
         kind: 'table',
         caption: `${t}: Association between Level of Nursing Workload and Level of IPC Compliance`,
-        headers: ['Level of workload', ...ct.colLabels.map(l => `${l} compliance`), 'Total', 'Statistics (X², df, p)'],
+        headers: ['Level of workload', ...ct.colLabels.map(l => `${l} compliance n (%)`), 'Total', 'Statistics (X², df, p)'],
         rows: [
-          ...ct.observed.map((row, i) => [
-            cell(ct.rowLabels[i]), ...row.map(v => cell(v)), cell(row.reduce((a, b) => a + b, 0)),
-            cell(statCells[i] ?? '', true),
-          ]),
-          [cell('Total', true), ...colTotals.map(v => cell(v, true)), cell(ct.n, true),
+          ...ct.observed.map((row, i) => {
+            const rowTotal = row.reduce((a, b) => a + b, 0);
+            return [
+              cell(ct.rowLabels[i]), ...row.map(v => cell(nPct(v, rowTotal))), cell(rowTotal),
+              cell(statCells[i] ?? '', true),
+            ];
+          }),
+          [cell('Total', true), ...colTotals.map(v => cell(nPct(v, ct.n), true)), cell(ct.n, true),
             cell(ct.observed.length < 3 ? statCells.slice(ct.observed.length).join(', ') : '', true)],
         ],
         note: ct.expectedCountWarning
-          ? 'More than 20% of the cells have an expected count below 5, so the chi-square result should be interpreted with caution.'
+          ? 'More than 20% of the cells had an expected count below 5, so the chi-square result should be interpreted with caution.'
           : undefined,
       });
-      para(`${t} presents the association between the level of nursing workload and the level of compliance with `
+      para(`${t} showed the association between the level of nursing workload and the level of compliance with `
         + `IPC practices among the respondents. ${decisionText(h, `X² = ${num(ct.chiSquare, 3)}, ${pText(ct.p)}`,
           'association between the level of workload and the level of IPC compliance')}`);
     } else {
-      const scale = h.id === 'H3' ? workload : ipc;
-      const what = h.id === 'H3' ? 'nursing workload' : 'compliance with IPC practices';
       const t = nextTable();
-      add(kruskalTable(`${t}: Difference in ${h.id === 'H3' ? 'Nursing Workload' : 'IPC Compliance'} across Service Areas`,
-        scale.byWardGroup));
-      para(`${t} presents the difference in ${what} across the service areas of the hospital. `
-        + decisionText(h, `H = ${num(h.statistic, 3)}, ${pText(h.p)}`, `difference in ${what} across the service areas`));
+      const area = model.ipcByArea;
+      const areas = area.unit === 'service area' ? 'service areas' : 'wards / units';
+      add(kruskalTable(`${t}: Difference in IPC Compliance across ${area.unit === 'service area' ? 'Service Areas' : 'Wards / Units'}`,
+        area.unit === 'service area' ? 'Service area' : 'Ward / unit', area.result));
+      para(`${t} showed the difference in compliance with IPC practices across the ${areas} of the hospital. `
+        + decisionText(h, `H = ${num(h.statistic, 3)}, ${pText(h.p)}`,
+          `difference in compliance with IPC practices across the ${areas}`));
     }
   }
 
-  // Appendix-style reliability table, as the template carries in Appendix III.
-  add({ kind: 'heading', text: 'Reliability of the Instruments' });
+  // Reliability belongs with the appendices at the end of the project, not in
+  // the results chapter; it follows on a fresh page so it can be moved there.
+  add({ kind: 'pageBreak' });
+  add({ kind: 'chapterTitle', lines: ['APPENDIX', 'RELIABILITY OF THE INSTRUMENTS'] });
   add({
     kind: 'table',
-    caption: `Table 4.${tableNo++}: Internal Consistency (Cronbach's Alpha) of the Instruments in this Study`,
+    caption: "Table A1: Internal Consistency (Cronbach's Alpha) of the Instruments",
     headers: ['Instrument / subscale', 'No. of items', "Cronbach's alpha", 'Interpretation'],
     rows: [
       [cell('Nursing workload scale', true), cell(WORKLOAD_ITEMS.length), cell(num(workload.alpha, 3)), cell(workload.alphaVerdict)],

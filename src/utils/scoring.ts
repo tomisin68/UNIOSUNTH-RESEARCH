@@ -81,3 +81,50 @@ export function getIPCCategory(score: number): IPCCategory {
   if (score < 90) return 'Satisfactory';
   return 'Optimal';
 }
+
+// ── Study levels (thesis classification) ──────────────────────────────────
+// The per-nurse categories above are what each nurse sees on the results
+// screen and what Firestore stores. The thesis classifies respondents more
+// coarsely, on the raw total, as the project supervisor asked:
+//   Workload: 3 levels, equal class intervals over 12–60, width (60 − 12) ÷ 3 = 16.
+//   Compliance: 2 levels split at the criterion mean of 2.50 on the 1–4 scale,
+//   i.e. a total of 2.50 × 20 = 50.
+// Missing responses count as 1, exactly as in the scores above.
+
+export type WorkloadLevel = 'Low' | 'Moderate' | 'High';
+export type ComplianceLevel = 'Low' | 'High';
+
+export interface LevelRange<L extends string> { label: L; min: number; max: number }
+
+export const WORKLOAD_LEVELS: LevelRange<WorkloadLevel>[] = [
+  { label: 'Low', min: 12, max: 28 },
+  { label: 'Moderate', min: 29, max: 44 },
+  { label: 'High', min: 45, max: 60 },
+];
+
+export const COMPLIANCE_LEVELS: LevelRange<ComplianceLevel>[] = [
+  { label: 'Low', min: 20, max: 49 },
+  { label: 'High', min: 50, max: 80 },
+];
+
+export function workloadTotal(responses: WorkloadResponse | undefined): number {
+  return WORKLOAD_ITEMS.reduce((sum, item) => {
+    const raw = responses?.[item.id] ?? 1;
+    return sum + (item.reversed ? 6 - raw : raw);
+  }, 0);
+}
+
+export function ipcTotal(responses: IPCResponse | undefined): number {
+  return IPC_ITEMS.reduce((sum, item) => {
+    const raw = responses?.[item.id] ?? 1;
+    return sum + (item.reversed ? 5 - raw : raw);
+  }, 0);
+}
+
+export function getWorkloadLevel(total: number): WorkloadLevel {
+  return WORKLOAD_LEVELS.find(l => total <= l.max)?.label ?? 'High';
+}
+
+export function getComplianceLevel(total: number): ComplianceLevel {
+  return total >= COMPLIANCE_LEVELS[1].min ? 'High' : 'Low';
+}
