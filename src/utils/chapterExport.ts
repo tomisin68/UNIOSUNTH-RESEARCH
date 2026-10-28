@@ -144,6 +144,11 @@ function saveBlob(filename: string, blob: Blob): void {
 // ── Word (.docx) ──────────────────────────────────────────────────────────
 
 export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
+  saveBlob(`${FILE_BASE()}.docx`, await buildChapterDocx(chapter));
+}
+
+/** The chapter as a .docx Blob; separate from the download so page fit can be checked. */
+export async function buildChapterDocx(chapter: ChapterFour): Promise<Blob> {
   const {
     Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, PageBreak,
     AlignmentType, WidthType, BorderStyle, LineRuleType,
@@ -163,6 +168,8 @@ export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
       spacing: block.compact
         ? { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO }
         : { before: 40, after: 40, line: 276, lineRule: LineRuleType.AUTO },
+      // The paragraph mark gets the cell's size too, or an empty cell is as tall as 12pt text.
+      run: { font: FONT, size: block.compact ? 18 : 22 },
       children: [body(text, { bold, size: block.compact ? 18 : 22 })],
     });
     const header = new TableRow({
@@ -176,6 +183,7 @@ export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
     const TABLE_TWIPS = 9026; // A4 width less two 1-inch margins
     return new Table({
       width: { size: TABLE_TWIPS, type: WidthType.DXA },
+      ...(block.compact ? { margins: { top: 0, bottom: 0, left: 80, right: 80 } } : {}),
       columnWidths: columnFractions(block).map(f => Math.round(f * TABLE_TWIPS)),
       rows: [header, ...rows],
     });
@@ -262,7 +270,7 @@ export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
     }],
   });
 
-  saveBlob(`${FILE_BASE()}.docx`, await Packer.toBlob(doc));
+  return Packer.toBlob(doc);
 }
 
 // ── PDF ───────────────────────────────────────────────────────────────────
@@ -278,6 +286,10 @@ function pdfSafe(text: string): string {
 }
 
 export async function downloadChapterPdf(chapter: ChapterFour): Promise<void> {
+  (await buildChapterPdf(chapter)).save(`${FILE_BASE()}.pdf`);
+}
+
+export async function buildChapterPdf(chapter: ChapterFour) {
   const [{ jsPDF }, { applyPlugin }] = await Promise.all([
     import('jspdf'), import('jspdf-autotable'),
   ]);
@@ -353,8 +365,8 @@ export async function downloadChapterPdf(chapter: ChapterFour): Promise<void> {
           }))),
           theme: 'grid',
           styles: {
-            font: 'times', fontSize: block.compact ? 9 : 10, textColor: 20, lineColor: 0, lineWidth: 0.2,
-            cellPadding: block.compact ? 0.6 : 1.6, valign: 'top',
+            font: 'times', fontSize: block.compact ? 7.5 : 10, textColor: 20, lineColor: 0, lineWidth: 0.2,
+            cellPadding: block.compact ? { top: 0.3, bottom: 0.3, left: 1.2, right: 1.2 } : 1.6, valign: 'top',
           },
           headStyles: { fillColor: [255, 255, 255], textColor: 0, fontStyle: 'bold' },
           rowPageBreak: 'avoid',
@@ -393,7 +405,7 @@ export async function downloadChapterPdf(chapter: ChapterFour): Promise<void> {
     doc.text(String(i), pageW / 2, pageH - 12, { align: 'center' });
   }
 
-  doc.save(`${FILE_BASE()}.pdf`);
+  return doc;
 }
 
 // ── HTML (opens in a browser or Word, prints cleanly) ─────────────────────
@@ -443,8 +455,8 @@ export function buildChapterHTML(chapter: ChapterFour): string {
   table { border-collapse: collapse; width: 100%; margin: 0 0 12px; font-size: 11pt; line-height: 1.3; }
   th, td { border: 1px solid #000; padding: 4px 6px; text-align: left; vertical-align: top; }
   th, td.b { font-weight: bold; }
-  table.compact { font-size: 10pt; line-height: 1.15; }
-  table.compact th, table.compact td { padding: 2px 6px; }
+  table.compact { font-size: 8pt; line-height: 1.1; }
+  table.compact th, table.compact td { padding: 1px 5px; }
   .note { font-size: 10pt; font-style: italic; }
   .page-break { border: 0; border-top: 1px dashed #999; margin: 40px 0; page-break-after: always; }
   figure { margin: 18px 0; text-align: center; page-break-inside: avoid; }
