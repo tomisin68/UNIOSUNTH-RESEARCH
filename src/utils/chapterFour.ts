@@ -396,8 +396,10 @@ function complianceComputation(): string {
   return `The overall level of compliance was determined by summing each respondent's scores on the ${items} `
     + `items, after reverse-scoring the ${reversed} negatively worded items, giving a possible total of ${min} `
     + `(${items} × 1) to ${max} (${items} × 4). Each total was converted to a percentage score `
-    + `[(total - ${min}) ÷ (${max} - ${min}) × 100], and a score of 80% or more was taken as high compliance; `
-    + `80% corresponds to a total of ${min} + 0.8 × ${max - min} = ${cut}, so totals of `
+    + `[(total - ${min}) ÷ (${max} - ${min}) × 100] and graded poor (below 50%), suboptimal (50-69%), `
+    + `satisfactory (70-89%) or optimal (90% and above). Poor and suboptimal were classified as low compliance, `
+    + `and satisfactory and optimal as high compliance; 70% corresponds to a total of `
+    + `${min} + 0.7 × ${max - min} = ${cut}, so totals of `
     + `${rangeList(COMPLIANCE_LEVELS)} compliance.`;
 }
 
