@@ -395,8 +395,10 @@ function complianceComputation(): string {
   const cut = COMPLIANCE_LEVELS[1].min;
   return `The overall level of compliance was determined by summing each respondent's scores on the ${items} `
     + `items, after reverse-scoring the ${reversed} negatively worded items, giving a possible total of ${min} `
-    + `(${items} × 1) to ${max} (${items} × 4). The criterion mean of 2.50 [(1 + 2 + 3 + 4) ÷ 4] multiplied by `
-    + `the ${items} items gave a cut-off total of ${cut}, so totals of ${rangeList(COMPLIANCE_LEVELS)} compliance.`;
+    + `(${items} × 1) to ${max} (${items} × 4). Each total was converted to a percentage score `
+    + `[(total - ${min}) ÷ (${max} - ${min}) × 100], and a score of 80% or more was taken as high compliance; `
+    + `80% corresponds to a total of ${min} + 0.8 × ${max - min} = ${cut}, so totals of `
+    + `${rangeList(COMPLIANCE_LEVELS)} compliance.`;
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────
@@ -467,7 +469,7 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
       + `${ipcTop.label.toLowerCase()} level of compliance. ` : '')
     + `The mean total compliance score was ${num(ipc.rawDescriptives.mean)} (SD = `
     + `${num(ipc.rawDescriptives.sd)}) out of a possible ${ipc.rawMax}, a mean item score of `
-    + `${num(ipc.itemMean, 2)} against the criterion mean of 2.50.`);
+    + `${num(ipc.itemMean, 2)} on the 4-point scale (a mean percentage score of ${num(ipc.descriptives.mean)}%).`);
 
   // 4.5
   add({ kind: 'heading', text: '4.5 Answering Research Questions' });
