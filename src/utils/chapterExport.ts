@@ -42,9 +42,16 @@ export function renderPiePNG(slices: PieSlice[], legendTitle: string): string {
     for (const slice of slices) {
       if (!slice.count) continue;
       const sweep = (slice.count / total) * Math.PI * 2;
+      // A single slice holding every response is a whole disc; an arc that ends where it
+      // starts draws nothing on some canvases, so draw the circle outright.
+      const whole = slice.count === total;
       ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, r, angle, angle + sweep);
+      if (whole) {
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      } else {
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, r, angle, angle + sweep);
+      }
       ctx.closePath();
       ctx.fillStyle = slice.color;
       ctx.fill();
@@ -54,11 +61,11 @@ export function renderPiePNG(slices: PieSlice[], legendTitle: string): string {
 
       const mid = angle + sweep / 2;
       const inside = sweep > 0.45;
-      const dist = inside ? r * 0.62 : r + 34;
+      const dist = whole ? 0 : inside ? r * 0.62 : r + 34;
       labels.push({
         x: cx + Math.cos(mid) * dist,
         y: cy + Math.sin(mid) * dist,
-        text: [`${slice.percent.toFixed(2)}%`, String(slice.count)],
+        text: [`${slice.percent.toFixed(1)}%`, String(slice.count)],
         inside,
       });
       angle += sweep;
@@ -89,8 +96,15 @@ export function renderPiePNG(slices: PieSlice[], legendTitle: string): string {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#111827';
   ctx.font = 'bold 22px Arial, sans-serif';
-  ctx.fillText(legendTitle, lx, ly);
-  ly += 40;
+  // A title wider than the legend column breaks before its bracket, so none of it is cut off.
+  const titleLines = ctx.measureText(legendTitle).width > PIE_W - lx - 12 && legendTitle.includes(' (')
+    ? [legendTitle.slice(0, legendTitle.indexOf(' (')), legendTitle.slice(legendTitle.indexOf(' (') + 1)]
+    : [legendTitle];
+  for (const line of titleLines) {
+    ctx.fillText(line, lx, ly);
+    ly += 28;
+  }
+  ly += 12;
   ctx.font = '20px Arial, sans-serif';
   for (const slice of slices) {
     ctx.fillStyle = slice.color;
@@ -172,10 +186,29 @@ export async function buildChapterDocx(chapter: ChapterFour): Promise<Blob> {
       run: { font: FONT, size: block.compact ? 18 : 22 },
       children: [body(text, { bold, size: block.compact ? 18 : 22 })],
     });
-    const header = new TableRow({
-      tableHeader: true,
-      children: block.headers.map(h => new TableCell({ borders, children: [cellPara(h, true)] })),
-    });
+    const group = block.headerGroup;
+    const inGroup = (i: number) => !!group && i >= group.start && i < group.start + group.span;
+    const headerRows = group
+      ? [
+        new TableRow({
+          tableHeader: true,
+          children: block.headers.flatMap((h, i) => {
+            if (i === group.start) {
+              return [new TableCell({ borders, columnSpan: group.span, children: [cellPara(group.label, true)] })];
+            }
+            return inGroup(i) ? [] : [new TableCell({ borders, rowSpan: 2, children: [cellPara(h, true)] })];
+          }),
+        }),
+        new TableRow({
+          tableHeader: true,
+          children: block.headers.filter((_, i) => inGroup(i))
+            .map(h => new TableCell({ borders, children: [cellPara(h, true)] })),
+        }),
+      ]
+      : [new TableRow({
+        tableHeader: true,
+        children: block.headers.map(h => new TableCell({ borders, children: [cellPara(h, true)] })),
+      })];
     const rows = block.rows.map(row => new TableRow({
       cantSplit: true,
       children: row.map(c => new TableCell({ borders, children: [cellPara(c.text, !!c.bold)] })),
@@ -185,7 +218,7 @@ export async function buildChapterDocx(chapter: ChapterFour): Promise<Blob> {
       width: { size: TABLE_TWIPS, type: WidthType.DXA },
       ...(block.compact ? { margins: { top: 0, bottom: 0, left: 80, right: 80 } } : {}),
       columnWidths: columnFractions(block).map(f => Math.round(f * TABLE_TWIPS)),
-      rows: [header, ...rows],
+      rows: [...headerRows, ...rows],
     });
   };
 
@@ -285,6 +318,20 @@ function pdfSafe(text: string): string {
     .replace(/[^\x00-\xFF–—…€]/g, '');
 }
 
+/** Header rows for autoTable, with the optional grouped heading above its columns. */
+function pdfHead(block: Extract<ChapterBlock, { kind: 'table' }>) {
+  const group = block.headerGroup;
+  if (!group) return [block.headers.map(pdfSafe)];
+  const end = group.start + group.span;
+  return [
+    block.headers.flatMap((h, i): Record<string, unknown>[] => {
+      if (i === group.start) return [{ content: pdfSafe(group.label), colSpan: group.span, styles: { halign: 'center' } }];
+      return i > group.start && i < end ? [] : [{ content: pdfSafe(h), rowSpan: 2 }];
+    }),
+    block.headers.slice(group.start, end).map(pdfSafe),
+  ];
+}
+
 export async function downloadChapterPdf(chapter: ChapterFour): Promise<void> {
   (await buildChapterPdf(chapter)).save(`${FILE_BASE()}.pdf`);
 }
@@ -358,7 +405,7 @@ export async function buildChapterPdf(chapter: ChapterFour) {
         autoTable({
           startY: y - 3,
           margin: { left: margin, right: margin },
-          head: [block.headers.map(pdfSafe)],
+          head: pdfHead(block),
           body: block.rows.map(row => row.map(c => ({
             content: pdfSafe(c.text),
             styles: { fontStyle: c.bold ? 'bold' : 'normal' },
@@ -413,6 +460,17 @@ export async function buildChapterPdf(chapter: ChapterFour) {
 const esc = (v: unknown) => String(v ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+function htmlHead(block: Extract<ChapterBlock, { kind: 'table' }>): string {
+  const group = block.headerGroup;
+  if (!group) return `<tr>${block.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr>`;
+  const end = group.start + group.span;
+  const top = block.headers.map((h, i) => {
+    if (i === group.start) return `<th colspan="${group.span}" class="group">${esc(group.label)}</th>`;
+    return i > group.start && i < end ? '' : `<th rowspan="2">${esc(h)}</th>`;
+  }).join('');
+  return `<tr>${top}</tr><tr>${block.headers.slice(group.start, end).map(h => `<th>${esc(h)}</th>`).join('')}</tr>`;
+}
+
 export function buildChapterHTML(chapter: ChapterFour): string {
   const parts = chapter.blocks.map(block => {
     switch (block.kind) {
@@ -425,9 +483,9 @@ export function buildChapterHTML(chapter: ChapterFour): string {
       case 'paragraph':
         return `<p>${esc(block.text)}</p>`;
       case 'table':
-        return `<p class="caption">${esc(block.caption)}</p><table${block.compact ? ' class="compact"' : ''}><thead><tr>${
-          block.headers.map(h => `<th>${esc(h)}</th>`).join('')
-        }</tr></thead><tbody>${
+        return `<p class="caption">${esc(block.caption)}</p><table${block.compact ? ' class="compact"' : ''}><thead>${
+          htmlHead(block)
+        }</thead><tbody>${
           block.rows.map(r => `<tr>${r.map(c => `<td${c.bold ? ' class="b"' : ''}>${esc(c.text)}</td>`).join('')}</tr>`).join('')
         }</tbody></table>${block.note ? `<p class="note">${esc(block.note)}</p>` : ''}`;
       case 'figure': {
@@ -455,6 +513,7 @@ export function buildChapterHTML(chapter: ChapterFour): string {
   table { border-collapse: collapse; width: 100%; margin: 0 0 12px; font-size: 11pt; line-height: 1.3; }
   th, td { border: 1px solid #000; padding: 4px 6px; text-align: left; vertical-align: top; }
   th, td.b { font-weight: bold; }
+  th.group { text-align: center; }
   table.compact { font-size: 8pt; line-height: 1.1; }
   table.compact th, table.compact td { padding: 1px 5px; }
   .note { font-size: 10pt; font-style: italic; }

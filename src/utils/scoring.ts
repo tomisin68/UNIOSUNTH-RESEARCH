@@ -87,9 +87,9 @@ export function getIPCCategory(score: number): IPCCategory {
 // screen and what Firestore stores. The thesis classifies respondents more
 // coarsely, on the raw total, as the project supervisor asked:
 //   Workload: 3 levels, equal class intervals over 12–60, width (60 − 12) ÷ 3 = 16.
-//   Compliance: 2 levels that merge the per-nurse categories above: Poor and
-//   Suboptimal (< 70%) are low, Satisfactory and Optimal (>= 70%) are high.
-//   70% is a total of 20 + 0.7 × (80 − 20) = 62.
+//   Compliance: 2 levels by the criterion mean, (1 + 2 + 3 + 4) ÷ 4 = 2.50. A mean
+//   item score of 2.50 or more (a total of 2.50 × 20 = 50 or more) is high. The
+//   supervisor rejected merging the per-nurse categories into two (2026-10-29).
 // Missing responses count as 1, exactly as in the scores above.
 
 export type WorkloadLevel = 'Low' | 'Moderate' | 'High';
@@ -104,8 +104,8 @@ export const WORKLOAD_LEVELS: LevelRange<WorkloadLevel>[] = [
 ];
 
 export const COMPLIANCE_LEVELS: LevelRange<ComplianceLevel>[] = [
-  { label: 'Low', min: 20, max: 61 },
-  { label: 'High', min: 62, max: 80 },
+  { label: 'Low', min: 20, max: 49 },
+  { label: 'High', min: 50, max: 80 },
 ];
 
 export function workloadTotal(responses: WorkloadResponse | undefined): number {

@@ -1,5 +1,5 @@
-import type { AnalysisModel, HypothesisResult, ScaleAnalysis } from './analysisModel';
-import { ALPHA } from './analysisModel';
+import type { AnalysisModel, HypothesisResult } from './analysisModel';
+import { ALPHA, IPC_BANDS } from './analysisModel';
 import type { AssessmentRecord, ScaleItem } from '../types';
 import { WORKLOAD_ITEMS, WORKLOAD_LABELS, WORKLOAD_SUBSCALES } from '../data/workloadItems';
 import { IPC_ITEMS, IPC_LABELS, IPC_SUBSCALES } from '../data/ipcItems';
@@ -32,7 +32,9 @@ export type ChapterBlock =
   | { kind: 'paragraph'; text: string }
   | { kind: 'table'; caption: string; headers: string[]; rows: TableCell[][]; note?: string;
       /** Tighter type and spacing, so a long table fits on one page. */
-      compact?: boolean }
+      compact?: boolean;
+      /** A heading spanning `span` columns from `start`, above their own headers. */
+      headerGroup?: { label: string; start: number; span: number } }
   | { kind: 'figure'; caption: string; legendTitle: string; slices: PieSlice[] }
   | { kind: 'pageBreak' };
 
@@ -53,12 +55,38 @@ export interface ChapterFour {
 
 const pct = (v: number) => (Number.isFinite(v) ? v.toFixed(1) : '0.0');
 const num = (v: number, dp = 1) => (Number.isFinite(v) ? v.toFixed(dp) : '-');
-const nPct = (count: number, total: number) =>
-  `${count} (${pct(total ? (count / total) * 100 : 0)})`;
 const pText = (p: number) =>
   (!Number.isFinite(p) ? 'p = -' : p < 0.001 ? 'p < 0.001' : `p = ${p.toFixed(3)}`);
 
 const cell = (text: string | number, bold = false): TableCell => ({ text: String(text), bold });
+
+/** Percentages of `counts` to one decimal that add up to exactly 100.0 (largest
+ *  remainder); rounding each on its own can total 99.9 or 100.1, which the
+ *  supervisor flagged when adding the columns up. */
+function shares(counts: number[]): number[] {
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (!total) return counts.map(() => 0);
+  const tenths = counts.map(c => (c / total) * 1000);
+  const units = tenths.map(Math.floor);
+  let left = 1000 - units.reduce((a, b) => a + b, 0);
+  const byRemainder = tenths.map((t, i) => ({ i, r: t - units[i] })).sort((a, b) => b.r - a.r);
+  for (const { i } of byRemainder) {
+    if (left <= 0) break;
+    units[i]++;
+    left--;
+  }
+  return units.map(u => u / 10);
+}
+
+const addPct = (...values: number[]) => Math.round(values.reduce((a, b) => a + b, 0) * 10) / 10;
+
+/** "112 (90.3)" from a count and an already-balanced percentage. */
+const nP = (count: number, percent: number) => `${count} (${pct(percent)})`;
+
+function withShares(rows: FrequencyRow[]): FrequencyRow[] {
+  const p = shares(rows.map(r => r.count));
+  return rows.map((r, i) => ({ ...r, percent: p[i] }));
+}
 
 /** "majority" only when it really is more than half; otherwise say so honestly. */
 function share(percent: number): string {
@@ -84,6 +112,8 @@ interface ItemDistribution {
   item: ScaleItem;
   counts: number[]; // index 0 = response 1
   answered: number;
+  /** Share of each response, balanced to total 100.0. */
+  percents: number[];
   /** Mean and SD of the scored response (after reverse keying), from the same answers. */
   mean: number;
   sd: number;
@@ -105,7 +135,9 @@ function distributions(
         scored.push(item.reversed ? points + 1 - raw : raw);
       }
     }
-    return { item, counts, answered: scored.length, mean: mean(scored), sd: stdDev(scored) };
+    return {
+      item, counts, answered: scored.length, percents: shares(counts), mean: mean(scored), sd: stdDev(scored),
+    };
   });
 }
 
@@ -144,7 +176,7 @@ function demographicsTable(model: AnalysisModel): ChapterBlock {
 
   const rows: TableCell[][] = [];
   for (const [variable, freq] of groups) {
-    freq.forEach((r, i) => {
+    withShares(freq).forEach((r, i) => {
       rows.push([cell(i === 0 ? variable : '', i === 0), cell(r.label), cell(r.count), cell(pct(r.percent))]);
     });
   }
@@ -160,12 +192,12 @@ function demographicsTable(model: AnalysisModel): ChapterBlock {
 
 function demographicsNarrative(model: AnalysisModel): string {
   const parts: string[] = [];
-  const area = modal(model.sample.wardGroup);
-  const ward = modal(model.sample.ward);
-  const shift = modal(model.sample.shift);
-  const qual = modal(model.sample.qualification);
-  const exp = modal(model.sample.experienceBand);
-  const load = modal(model.sample.patientLoadBand);
+  const area = modal(withShares(model.sample.wardGroup));
+  const ward = modal(withShares(model.sample.ward));
+  const shift = modal(withShares(model.sample.shift));
+  const qual = modal(withShares(model.sample.qualification));
+  const exp = modal(withShares(model.sample.experienceBand));
+  const load = modal(withShares(model.sample.patientLoadBand));
 
   if (area) {
     parts.push(`It revealed that ${share(area.percent)} ${area.count} (${pct(area.percent)}%) worked in the `
@@ -199,33 +231,35 @@ function itemTable(
   caption: string,
   dists: ItemDistribution[],
   labels: Record<number, string>,
-  firstNumber: number,
+  /** First S/N, or null for no S/N column (Table 4.3, at the supervisor's request). */
+  firstNumber: number | null,
   overall: number[],
   markReversed: boolean,
 ): ChapterBlock {
   const points = Object.keys(labels).length;
   const criterion = (points + 1) / 2;
   const blank = Array.from({ length: points }, () => cell(''));
+  const serial = (index: number) => (firstNumber === null ? [] : [cell(index < 0 ? '' : firstNumber + index)]);
   return {
     kind: 'table',
     caption,
     headers: [
-      'S/N', 'Variables', ...Array.from({ length: points }, (_, i) => `${labels[i + 1]} n (%)`),
-      'Mean', 'SD',
+      ...(firstNumber === null ? [] : ['S/N']), 'Variables',
+      ...Array.from({ length: points }, (_, i) => `${labels[i + 1]} n (%)`), 'Mean', 'SD',
     ],
     rows: [
       ...dists.map((d, index) => [
-        cell(firstNumber + index),
+        ...serial(index),
         cell(d.item.text + (markReversed && d.item.reversed ? ' *' : '')),
-        ...d.counts.map(c => cell(nPct(c, d.answered))),
+        ...d.counts.map((c, k) => cell(nP(c, d.percents[k]))),
         cell(num(d.mean, 2)),
         cell(num(d.sd, 2)),
       ]),
-      [cell(''), cell(`Grand mean (sum of the ${dists.length} item means ÷ ${dists.length})`, true), ...blank,
+      [...serial(-1), cell(`Grand mean (sum of the ${dists.length} item means ÷ ${dists.length})`, true), ...blank,
         cell(num(mean(overall), 2), true), cell(num(stdDev(overall), 2), true)],
     ],
     note: [
-      'Each row totals 100% of the respondents who answered the item. Mean and SD are on the '
+      'Each row totals 100.0% of the respondents who answered the item. Mean and SD are on the '
         + `1-${points} response scale; criterion mean = (${Array.from({ length: points }, (_, i) => i + 1).join(' + ')}) `
         + `÷ ${points} = ${criterion.toFixed(2)}.`,
       markReversed && dists.some(d => d.item.reversed)
@@ -243,11 +277,11 @@ function workloadNarrative(dists: ItemDistribution[]): string[] {
     const sentences = dists
       .filter(d => d.item.subscale === subscale)
       .map(d => {
-        const high = d.counts[3] + d.counts[4];
-        const low = d.counts[0] + d.counts[1];
-        return `${nPct(high, d.answered).replace(')', '%)')} of the respondents rated `
+        const high = nP(d.counts[3] + d.counts[4], addPct(d.percents[3], d.percents[4])).replace(')', '%)');
+        const low = nP(d.counts[0] + d.counts[1], addPct(d.percents[0], d.percents[1])).replace(')', '%)');
+        return `${high} of the respondents rated `
           + `"${d.item.text.replace(/\.$/, '')}" as very much or extremely, while `
-          + `${nPct(low, d.answered).replace(')', '%)')} rated it not at all or slightly (mean = ${num(d.mean, 2)}).`;
+          + `${low} rated it not at all or slightly (mean = ${num(d.mean, 2)}).`;
       });
     paragraphs.push(`${subscale}: ${sentences.join(' ')}`);
   }
@@ -255,7 +289,7 @@ function workloadNarrative(dists: ItemDistribution[]): string[] {
   const heaviest = [...dists].sort((a, b) =>
     (b.counts[3] + b.counts[4]) / (b.answered || 1) - (a.counts[3] + a.counts[4]) / (a.answered || 1))[0];
   if (heaviest?.answered) {
-    const share = ((heaviest.counts[3] + heaviest.counts[4]) / heaviest.answered) * 100;
+    const share = addPct(heaviest.percents[3], heaviest.percents[4]);
     paragraphs.push(`Overall, the most burdensome aspect of the shift was "${heaviest.item.text.replace(/\.$/, '')}", `
       + `rated very much or extremely by ${pct(share)}% of the respondents.`);
   }
@@ -271,34 +305,35 @@ function ipcNarrative(dists: ItemDistribution[], tableNumber: string): string[] 
     const sentences = dists
       .filter(d => d.item.subscale === subscale)
       .map(d => {
-        const [never, rarely, sometimes, always] = d.counts;
         const phrase = verbPhrase(d.item.text);
         const subject = phrase ?? `"${d.item.text.replace(/\.$/, '')}"`;
-        const p = (c: number) => nPct(c, d.answered).replace(')', '%)');
+        // Response indexes: 0 never, 1 rarely, 2 sometimes, 3 always; p() adds balanced shares.
+        const [never, rarely, sometimes, always] = [0, 1, 2, 3];
+        const p = (...k: number[]) => nP(k.reduce((sum, i) => sum + d.counts[i], 0),
+          addPct(...k.map(i => d.percents[i]))).replace(')', '%)');
         const m = ` (mean = ${num(d.mean, 2)})`;
         if (d.item.reversed) {
           return phrase
             ? `${p(never)} of the respondents reported that they never ${subject}, which is the safe practice, `
-              + `while ${p(sometimes + always)} reported doing so sometimes or always${m}.`
+              + `while ${p(sometimes, always)} reported doing so sometimes or always${m}.`
             : `${p(never)} of the respondents responded never (the safe practice) to ${subject}, `
-              + `while ${p(sometimes + always)} responded sometimes or always${m}.`;
+              + `while ${p(sometimes, always)} responded sometimes or always${m}.`;
         }
         return phrase
           ? `${p(always)} of the respondents reported that they always ${subject}, `
-            + `while ${p(never + rarely)} reported doing so rarely or never${m}.`
+            + `while ${p(never, rarely)} reported doing so rarely or never${m}.`
           : `${p(always)} of the respondents responded always to ${subject}, `
-            + `while ${p(never + rarely)} responded rarely or never${m}.`;
+            + `while ${p(never, rarely)} responded rarely or never${m}.`;
       });
     paragraphs.push(`${subscale}: ${sentences.join(' ')}`);
   }
 
   // The weakest practice is the one with the smallest share giving the safe answer.
-  const safeShare = (d: ItemDistribution) =>
-    (d.item.reversed ? d.counts[0] : d.counts[3]) / (d.answered || 1);
+  const safeShare = (d: ItemDistribution) => d.percents[d.item.reversed ? 0 : 3];
   const weakest = [...dists].filter(d => d.answered).sort((a, b) => safeShare(a) - safeShare(b))[0];
   if (weakest) {
     paragraphs.push(`The practice with the lowest level of consistent compliance was "${weakest.item.text.replace(/\.$/, '')}", `
-      + `where only ${pct(safeShare(weakest) * 100)}% of the respondents gave the safe response.`);
+      + `where only ${pct(safeShare(weakest))}% of the respondents gave the safe response.`);
   }
 
   paragraphs[0] = `Table ${tableNumber} above showed the compliance of the respondents with infection prevention `
@@ -306,14 +341,11 @@ function ipcNarrative(dists: ItemDistribution[], tableNumber: string): string[] 
   return paragraphs;
 }
 
-function bandSlices(scale: ScaleAnalysis, palette: string[], ranges: LevelRange<string>[]): PieSlice[] {
-  return scale.bands.map((b, i) => {
-    const range = ranges.find(r => r.label === b.label);
-    return {
-      label: range ? `${b.label} (${range.min}-${range.max})` : b.label,
-      count: b.count, percent: b.percent, color: palette[i % palette.length],
-    };
-  });
+/** Slices are labelled by level only; the score ranges are given in the text above the chart. */
+function bandSlices(bands: FrequencyRow[], palette: string[]): PieSlice[] {
+  return bands.map((b, i) => ({
+    label: b.label, count: b.count, percent: b.percent, color: palette[i % palette.length],
+  }));
 }
 
 /** "12-28 were classified as low, 29-44 as moderate and 45-60 as high" */
@@ -331,10 +363,12 @@ function bandSentence(bands: FrequencyRow[], noun: string): string {
   const [first, ...rest] = present;
   const head = `${first.count} (${pct(first.percent)}%) of the respondents had a `
     + `${first.label.toLowerCase()} level of ${noun}`;
-  if (!rest.length) return head;
+  const empty = bands.filter(b => b.count === 0).map(b => b.label.toLowerCase());
+  const none = empty.length ? `, while none had a ${empty.join(' or ')} level` : '';
+  if (!rest.length) return head + none;
   const tail = rest.map(b => `${b.count} (${pct(b.percent)}%) ${b.label.toLowerCase()}`);
   const last = tail.pop();
-  return tail.length ? `${head}, ${tail.join(', ')} and ${last}` : `${head} and ${last}`;
+  return (tail.length ? `${head}, ${tail.join(', ')} and ${last}` : `${head} and ${last}`) + none;
 }
 
 // ── Hypotheses ────────────────────────────────────────────────────────────
@@ -369,6 +403,10 @@ function kruskalTable(caption: string, groupHeader: string, result: KruskalWalli
       [cell('Total', true), cell(result.n, true), cell(''), cell(''),
         cell(statCells.slice(result.groups.length).join(', '), true)],
     ],
+    note: 'Mean score (%) is the average compliance percentage score [(total - 20) ÷ 60 × 100] of the '
+      + `respondents in each group. For the mean rank, all ${result.n} compliance scores were ranked from the `
+      + `lowest (rank 1) to the highest (rank ${result.n}), tied scores sharing the average of their ranks, and the `
+      + 'ranks were averaged within each group; the Kruskal-Wallis H test compares these mean ranks.',
   };
 }
 
@@ -395,12 +433,10 @@ function complianceComputation(): string {
   const cut = COMPLIANCE_LEVELS[1].min;
   return `The overall level of compliance was determined by summing each respondent's scores on the ${items} `
     + `items, after reverse-scoring the ${reversed} negatively worded items, giving a possible total of ${min} `
-    + `(${items} × 1) to ${max} (${items} × 4). Each total was converted to a percentage score `
-    + `[(total - ${min}) ÷ (${max} - ${min}) × 100] and graded poor (below 50%), suboptimal (50-69%), `
-    + `satisfactory (70-89%) or optimal (90% and above). Poor and suboptimal were classified as low compliance, `
-    + `and satisfactory and optimal as high compliance; 70% corresponds to a total of `
-    + `${min} + 0.7 × ${max - min} = ${cut}, so totals of `
-    + `${rangeList(COMPLIANCE_LEVELS)} compliance.`;
+    + `(${items} × 1) to ${max} (${items} × 4). Each respondent's mean item score (total ÷ ${items}) was then `
+    + `compared with the criterion mean of 2.50 [(1 + 2 + 3 + 4) ÷ 4]: a mean of 2.50 or above was classified as `
+    + `high compliance and a mean below 2.50 as low compliance. A mean of 2.50 corresponds to a total of `
+    + `2.50 × ${items} = ${cut}, so totals of ${rangeList(COMPLIANCE_LEVELS)} compliance.`;
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────
@@ -414,6 +450,8 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
 
   const workloadDists = distributions(records, WORKLOAD_ITEMS, 'workloadResponses', 5);
   const ipcDists = distributions(records, IPC_ITEMS, 'ipcResponses', 4);
+  const wlBands = withShares(workload.bands);
+  const ipcBands = withShares(ipc.bands);
 
   add({ kind: 'chapterTitle', lines: ['CHAPTER FOUR', 'DATA ANALYSIS AND RESULTS'] });
 
@@ -439,11 +477,11 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
     kind: 'figure',
     caption: 'Fig 4.1: Pie Chart showing the Overall Level of Nursing Workload of the Respondents',
     legendTitle: 'Workload level (total score)',
-    slices: bandSlices(workload, model.conclusions[0]?.palette ?? [], WORKLOAD_LEVELS),
+    slices: bandSlices(wlBands, model.conclusions[0]?.palette ?? []),
   });
-  const wlTop = modal(workload.bands);
+  const wlTop = modal(wlBands);
   para(`Figure 4.1 above showed the overall level of workload of the respondents. It revealed that `
-    + `${bandSentence(workload.bands, 'workload')}. `
+    + `${bandSentence(wlBands, 'workload')}. `
     + (wlTop ? `This showed that ${share(wlTop.percent)} ${wlTop.count} (${pct(wlTop.percent)}%) experienced a `
       + `${wlTop.label.toLowerCase()} level of workload. ` : '')
     + `The mean total workload score was ${num(workload.rawDescriptives.mean)} (SD = `
@@ -453,7 +491,7 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
   // 4.4
   add({ kind: 'heading', text: '4.4 Compliance with Infection Prevention and Control Practices' });
   add(itemTable('Table 4.3: Compliance of the Respondents with IPC (Standard Precaution) Practices',
-    ipcDists, IPC_LABELS, WORKLOAD_ITEMS.length + 1,
+    ipcDists, IPC_LABELS, null,
     respondentMeans(records, IPC_ITEMS, 'ipcResponses', 4), true));
   ipcNarrative(ipcDists, '4.3').forEach(para);
 
@@ -462,11 +500,11 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
     kind: 'figure',
     caption: 'Fig 4.2: Pie Chart showing the Overall Level of IPC Compliance of the Respondents',
     legendTitle: 'Compliance level (total score)',
-    slices: bandSlices(ipc, model.conclusions[1]?.palette ?? [], COMPLIANCE_LEVELS),
+    slices: bandSlices(ipcBands, model.conclusions[1]?.palette ?? []),
   });
-  const ipcTop = modal(ipc.bands);
+  const ipcTop = modal(ipcBands);
   para(`Figure 4.2 above showed the overall level of compliance of the respondents with infection `
-    + `prevention and control practices. It revealed that ${bandSentence(ipc.bands, 'compliance')}. `
+    + `prevention and control practices. It revealed that ${bandSentence(ipcBands, 'compliance')}. `
     + (ipcTop ? `This showed that ${share(ipcTop.percent)} ${ipcTop.count} (${pct(ipcTop.percent)}%) had a `
       + `${ipcTop.label.toLowerCase()} level of compliance. ` : '')
     + `The mean total compliance score was ${num(ipc.rawDescriptives.mean)} (SD = `
@@ -475,17 +513,17 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
 
   // 4.5
   add({ kind: 'heading', text: '4.5 Answering Research Questions' });
-  const high = workload.bands.find(b => b.label === 'High');
+  const high = wlBands.find(b => b.label === 'High');
   add({ kind: 'subheading', text: '1. What is the level of nursing workload among nurses in UNIOSUN Teaching Hospital?' });
   para(`According to figure 4.1 above, which showed the overall level of workload of the respondents, `
-    + `${bandSentence(workload.bands, 'workload')}. In all, ${nPct(high?.count ?? 0, n).replace(')', '%)')} of the `
+    + `${bandSentence(wlBands, 'workload')}. In all, ${nP(high?.count ?? 0, high?.percent ?? 0).replace(')', '%)')} of the `
     + 'respondents experienced a high level of workload. '
     + (wlTop ? `The level of nursing workload among nurses in UNIOSUN Teaching Hospital was therefore predominantly ${wlTop.label.toLowerCase()}.` : ''));
 
-  const compliant = ipc.bands.find(b => b.label === 'High');
+  const compliant = ipcBands.find(b => b.label === 'High');
   add({ kind: 'subheading', text: '2. What is the level of compliance with infection prevention and control practices among nurses in UNIOSUN Teaching Hospital?' });
   para(`According to figure 4.2 above, which showed the overall level of compliance of the respondents, `
-    + `${bandSentence(ipc.bands, 'compliance')}. In all, ${nPct(compliant?.count ?? 0, n).replace(')', '%)')} of the `
+    + `${bandSentence(ipcBands, 'compliance')}. In all, ${nP(compliant?.count ?? 0, compliant?.percent ?? 0).replace(')', '%)')} of the `
     + 'respondents had a high level of compliance. '
     + (ipcTop ? `The level of compliance with IPC practices among nurses in UNIOSUN Teaching Hospital was therefore predominantly ${ipcTop.label.toLowerCase()}.` : ''));
 
@@ -521,30 +559,68 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
     } else if (h.id === 'H2') {
       const ct = model.crossTab;
       const t = nextTable();
-      const statCells = [`X² = ${num(ct.chiSquare, 3)}`, `df = ${Number.isFinite(ct.df) ? ct.df : '-'}`, pText(ct.p)];
-      const colTotals = ct.colLabels.map((_, j) => ct.observed.reduce((s, r) => s + r[j], 0));
+      // Every compliance level gets a column, even one nobody fell into, and each cell is a
+      // percentage of all respondents, so rows and columns both add up to their totals.
+      const cols = [...IPC_BANDS];
+      const observed = ct.rowLabels.map((_, i) => cols.map(c => {
+        const j = ct.colLabels.indexOf(c);
+        return j < 0 ? 0 : ct.observed[i][j];
+      }));
+      const cellPct = shares(observed.flat());
+      const at = (i: number, j: number) => cellPct[i * cols.length + j];
+      const rowTotals = observed.map(r => r.reduce((a, b) => a + b, 0));
+      const colTotals = cols.map((_, j) => observed.reduce((s, r) => s + r[j], 0));
+      const computable = ct.colLabels.length >= 2 && ct.rowLabels.length >= 2 && Number.isFinite(ct.p);
+      const statCells = computable
+        ? [`X² = ${num(ct.chiSquare, 3)}`, `df = ${ct.df}`, pText(ct.p)]
+        : ['X² not computable*'];
+      const onlyLevel = ct.colLabels.length === 1 ? ct.colLabels[0].toLowerCase() : null;
+
+      para(`In ${t}, each respondent was classified twice: by level of workload, using the total workload score `
+        + `(totals of ${rangeList(WORKLOAD_LEVELS)} workload, as in Figure 4.1), and by level of compliance, using `
+        + `the criterion mean (totals of ${rangeList(COMPLIANCE_LEVELS)} compliance, as in Figure 4.2). Each cell `
+        + `gives the number of respondents with that combination of levels and its percentage of all ${ct.n} `
+        + 'respondents, so the row totals are the numbers at each level of workload in Figure 4.1 and the column '
+        + 'totals are the numbers at each level of compliance in Figure 4.2.');
       add({
         kind: 'table',
         caption: `${t}: Association between Level of Nursing Workload and Level of IPC Compliance`,
-        headers: ['Level of workload', ...ct.colLabels.map(l => `${l} compliance n (%)`), 'Total', 'Statistics (X², df, p)'],
+        headers: ['Level of workload', ...cols.map(l => `${l} n (%)`), 'Total n (%)', 'Statistics (X², df, p)'],
+        headerGroup: { label: 'Level of compliance', start: 1, span: cols.length },
         rows: [
-          ...ct.observed.map((row, i) => {
-            const rowTotal = row.reduce((a, b) => a + b, 0);
-            return [
-              cell(ct.rowLabels[i]), ...row.map(v => cell(nPct(v, rowTotal))), cell(rowTotal),
-              cell(statCells[i] ?? '', true),
-            ];
-          }),
-          [cell('Total', true), ...colTotals.map(v => cell(nPct(v, ct.n), true)), cell(ct.n, true),
-            cell(ct.observed.length < 3 ? statCells.slice(ct.observed.length).join(', ') : '', true)],
+          ...observed.map((row, i) => [
+            cell(ct.rowLabels[i]), ...row.map((v, j) => cell(nP(v, at(i, j)))),
+            cell(nP(rowTotals[i], addPct(...cols.map((_, j) => at(i, j))))),
+            cell(statCells[i] ?? '', true),
+          ]),
+          [cell('Total', true),
+            ...colTotals.map((v, j) => cell(nP(v, addPct(...observed.map((_, i) => at(i, j)))), true)),
+            cell(nP(ct.n, ct.n ? 100 : 0), true),
+            cell(observed.length < statCells.length ? statCells.slice(observed.length).join(', ') : '', true)],
         ],
-        note: ct.expectedCountWarning
-          ? 'More than 20% of the cells had an expected count below 5, so the chi-square result should be interpreted with caution.'
-          : undefined,
+        note: [
+          `Percentages are of all ${ct.n} respondents.`,
+          !computable && onlyLevel
+            ? `* All respondents had a ${onlyLevel} level of compliance, so the level of compliance did not vary `
+              + 'and the chi-square statistic could not be computed.'
+            : '',
+          computable && ct.expectedCountWarning
+            ? 'More than 20% of the cells had an expected count below 5, so the chi-square result should be '
+              + 'interpreted with caution.'
+            : '',
+        ].filter(Boolean).join(' '),
       });
       para(`${t} showed the association between the level of nursing workload and the level of compliance with `
-        + `IPC practices among the respondents. ${decisionText(h, `X² = ${num(ct.chiSquare, 3)}, ${pText(ct.p)}`,
-          'association between the level of workload and the level of IPC compliance')}`);
+        + 'IPC practices among the respondents. '
+        + (computable
+          ? decisionText(h, `X² = ${num(ct.chiSquare, 3)}, ${pText(ct.p)}`,
+            'association between the level of workload and the level of IPC compliance')
+          : onlyLevel
+            ? `All ${ct.n} respondents had a ${onlyLevel} level of compliance at every level of workload, so the `
+              + 'level of compliance did not vary and the chi-square statistic could not be computed. There was '
+              + 'therefore no evidence of an association between the level of workload and the level of '
+              + 'compliance, and the null hypothesis was not rejected.'
+            : decisionText(h, '', '')));
     } else {
       const t = nextTable();
       const area = model.ipcByArea;

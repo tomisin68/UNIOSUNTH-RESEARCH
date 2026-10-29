@@ -514,13 +514,16 @@ function buildHypotheses(input: {
       p: crossTab.p,
       n,
       decision: decide(crossTab.p, n, MINIMUM_N),
-      conclusion: decisionSentence(
-        decide(crossTab.p, n, MINIMUM_N),
-        'The null hypothesis is rejected: the level of compliance a nurse falls into depends on '
-        + 'their level of workload.',
-        'The null hypothesis is retained: level of compliance and level of workload are '
-        + 'independent in this sample.',
-      ),
+      conclusion: n >= MINIMUM_N && crossTab.colLabels.length === 1
+        ? `Every nurse falls in the same level of compliance (${crossTab.colLabels[0]}), so the chi-square `
+          + 'statistic cannot be computed and the null hypothesis is not rejected.'
+        : decisionSentence(
+          decide(crossTab.p, n, MINIMUM_N),
+          'The null hypothesis is rejected: the level of compliance a nurse falls into depends on '
+          + 'their level of workload.',
+          'The null hypothesis is retained: level of compliance and level of workload are '
+          + 'independent in this sample.',
+        ),
     },
     {
       id: 'H3',
