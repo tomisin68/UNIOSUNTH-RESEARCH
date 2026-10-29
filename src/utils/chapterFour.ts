@@ -34,7 +34,9 @@ export type ChapterBlock =
       /** Tighter type and spacing, so a long table fits on one page. */
       compact?: boolean;
       /** A heading spanning `span` columns from `start`, above their own headers. */
-      headerGroup?: { label: string; start: number; span: number } }
+      headerGroup?: { label: string; start: number; span: number };
+      /** Columns whose first-row cell spans every row (the X², df and p of a test). */
+      mergeDown?: number[] }
   | { kind: 'figure'; caption: string; legendTitle: string; slices: PieSlice[] }
   | { kind: 'pageBreak' };
 
@@ -388,20 +390,20 @@ function decisionText(h: HypothesisResult, statText: string, relationWord: strin
 }
 
 function kruskalTable(caption: string, groupHeader: string, result: KruskalWallisResult): ChapterBlock {
-  const statCells = [
-    `H = ${num(result.h, 3)}`, `df = ${Number.isFinite(result.df) ? result.df : '-'}`, pText(result.p),
-  ];
+  // H, df and p each sit in their own column, merged down the table (the supervisor's layout).
+  const stats = [num(result.h, 3), Number.isFinite(result.df) ? String(result.df) : '-',
+    pText(result.p).replace(/^p = /, '')];
+  const statCells = (i: number) => stats.map(s => cell(i === 0 ? s : '', true));
   return {
     kind: 'table',
     caption,
-    headers: [groupHeader, 'n', 'Mean score (%)', 'Mean rank', 'Statistics (H, df, p)'],
+    headers: [groupHeader, 'n', 'Mean score (%)', 'Mean rank', 'H', 'df', 'p'],
+    mergeDown: [4, 5, 6],
     rows: [
       ...result.groups.map((g, i) => [
-        cell(g.label), cell(g.n), cell(num(g.mean)), cell(num(g.meanRank)),
-        cell(statCells[i] ?? '', i < statCells.length),
+        cell(g.label), cell(g.n), cell(num(g.mean)), cell(num(g.meanRank)), ...statCells(i),
       ]),
-      [cell('Total', true), cell(result.n, true), cell(''), cell(''),
-        cell(statCells.slice(result.groups.length).join(', '), true)],
+      [cell('Total', true), cell(result.n, true), cell(''), cell(''), ...statCells(-1)],
     ],
     note: 'Mean score (%) is the average compliance percentage score [(total - 20) ÷ 60 × 100] of the '
       + `respondents in each group. For the mean rank, all ${result.n} compliance scores were ranked from the `
@@ -571,9 +573,11 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
       const rowTotals = observed.map(r => r.reduce((a, b) => a + b, 0));
       const colTotals = cols.map((_, j) => observed.reduce((s, r) => s + r[j], 0));
       const computable = ct.colLabels.length >= 2 && ct.rowLabels.length >= 2 && Number.isFinite(ct.p);
-      const statCells = computable
-        ? [`X² = ${num(ct.chiSquare, 3)}`, `df = ${ct.df}`, pText(ct.p)]
-        : ['X² not computable*'];
+      // X², df and p each sit in their own column, merged down the table (the supervisor's layout).
+      const stats = computable
+        ? [num(ct.chiSquare, 3), String(ct.df), pText(ct.p).replace(/^p = /, '')]
+        : ['Not computable*', '-', '-'];
+      const statCells = (i: number) => stats.map(s => cell(i === 0 ? s : '', true));
       const onlyLevel = ct.colLabels.length === 1 ? ct.colLabels[0].toLowerCase() : null;
 
       para(`In ${t}, each respondent was classified twice: by level of workload, using the total workload score `
@@ -585,18 +589,19 @@ export function buildChapterFour(model: AnalysisModel, records: AssessmentRecord
       add({
         kind: 'table',
         caption: `${t}: Association between Level of Nursing Workload and Level of IPC Compliance`,
-        headers: ['Level of workload', ...cols.map(l => `${l} n (%)`), 'Total n (%)', 'Statistics (X², df, p)'],
+        headers: ['Level of workload', ...cols.map(l => `${l} n (%)`), 'Total n (%)', 'X²', 'df', 'p'],
         headerGroup: { label: 'Level of compliance', start: 1, span: cols.length },
+        mergeDown: [cols.length + 2, cols.length + 3, cols.length + 4],
         rows: [
           ...observed.map((row, i) => [
             cell(ct.rowLabels[i]), ...row.map((v, j) => cell(nP(v, at(i, j)))),
             cell(nP(rowTotals[i], addPct(...cols.map((_, j) => at(i, j))))),
-            cell(statCells[i] ?? '', true),
+            ...statCells(i),
           ]),
           [cell('Total', true),
             ...colTotals.map((v, j) => cell(nP(v, addPct(...observed.map((_, i) => at(i, j)))), true)),
             cell(nP(ct.n, ct.n ? 100 : 0), true),
-            cell(observed.length < statCells.length ? statCells.slice(observed.length).join(', ') : '', true)],
+            ...statCells(-1)],
         ],
         note: [
           `Percentages are of all ${ct.n} respondents.`,

@@ -121,7 +121,10 @@ export function renderPiePNG(slices: PieSlice[], legendTitle: string): string {
  *  column holds, so statements get room and "19 (15.8)" columns stay even. */
 function columnFractions(block: Extract<ChapterBlock, { kind: 'table' }>): number[] {
   const weights = block.headers.map((header, col) => {
-    const lengths = block.rows.map(r => r[col]?.text.length ?? 0);
+    // A merged column holds one value for the whole table; size it by that value, not by its empty cells.
+    const lengths = block.mergeDown?.includes(col)
+      ? [block.rows[0]?.[col]?.text.length ?? 0]
+      : block.rows.map(r => r[col]?.text.length ?? 0);
     const average = lengths.reduce((a, b) => a + b, 0) / (lengths.length || 1);
     const longestWord = Math.max(...header.split(/\s+/).map(w => w.length));
     // Headers are bold and padded, so a header word needs a little more room than its letters.
@@ -165,7 +168,7 @@ export async function downloadChapterDocx(chapter: ChapterFour): Promise<void> {
 export async function buildChapterDocx(chapter: ChapterFour): Promise<Blob> {
   const {
     Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, PageBreak,
-    AlignmentType, WidthType, BorderStyle, LineRuleType,
+    AlignmentType, WidthType, BorderStyle, LineRuleType, VerticalAlign, TableLayoutType,
   } = await import('docx');
 
   const FONT = 'Times New Roman';
@@ -178,7 +181,8 @@ export async function buildChapterDocx(chapter: ChapterFour): Promise<Blob> {
   const children: (InstanceType<typeof Paragraph> | InstanceType<typeof Table>)[] = [];
 
   const toTable = (block: Extract<ChapterBlock, { kind: 'table' }>) => {
-    const cellPara = (text: string, bold: boolean) => new Paragraph({
+    const cellPara = (text: string, bold: boolean, center = false) => new Paragraph({
+      alignment: center ? AlignmentType.CENTER : undefined,
       spacing: block.compact
         ? { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO }
         : { before: 40, after: 40, line: 276, lineRule: LineRuleType.AUTO },
@@ -209,13 +213,24 @@ export async function buildChapterDocx(chapter: ChapterFour): Promise<Blob> {
         tableHeader: true,
         children: block.headers.map(h => new TableCell({ borders, children: [cellPara(h, true)] })),
       })];
-    const rows = block.rows.map(row => new TableRow({
+    const merged = new Set(block.mergeDown ?? []);
+    const rows = block.rows.map((row, r) => new TableRow({
       cantSplit: true,
-      children: row.map(c => new TableCell({ borders, children: [cellPara(c.text, !!c.bold)] })),
+      children: row.flatMap((c, col) => {
+        if (!merged.has(col)) return [new TableCell({ borders, children: [cellPara(c.text, !!c.bold)] })];
+        return r === 0
+          ? [new TableCell({
+            borders, rowSpan: block.rows.length, verticalAlign: VerticalAlign.CENTER,
+            children: [cellPara(c.text, !!c.bold, true)],
+          })]
+          : [];
+      }),
     }));
     const TABLE_TWIPS = 9026; // A4 width less two 1-inch margins
     return new Table({
       width: { size: TABLE_TWIPS, type: WidthType.DXA },
+      // Word shrinks auto-fit columns that are empty below a merged cell; fixed widths keep df and p readable.
+      ...(block.mergeDown?.length ? { layout: TableLayoutType.FIXED } : {}),
       ...(block.compact ? { margins: { top: 0, bottom: 0, left: 80, right: 80 } } : {}),
       columnWidths: columnFractions(block).map(f => Math.round(f * TABLE_TWIPS)),
       rows: [...headerRows, ...rows],
@@ -406,10 +421,15 @@ export async function buildChapterPdf(chapter: ChapterFour) {
           startY: y - 3,
           margin: { left: margin, right: margin },
           head: pdfHead(block),
-          body: block.rows.map(row => row.map(c => ({
-            content: pdfSafe(c.text),
-            styles: { fontStyle: c.bold ? 'bold' : 'normal' },
-          }))),
+          body: block.rows.map((row, r) => row.flatMap((c, col) => {
+            const merged = block.mergeDown?.includes(col);
+            if (merged && r > 0) return [];
+            return [{
+              content: pdfSafe(c.text),
+              ...(merged ? { rowSpan: block.rows.length } : {}),
+              styles: { fontStyle: c.bold ? 'bold' : 'normal', ...(merged ? { halign: 'center', valign: 'middle' } : {}) },
+            }];
+          })),
           theme: 'grid',
           styles: {
             font: 'times', fontSize: block.compact ? 7.5 : 10, textColor: 20, lineColor: 0, lineWidth: 0.2,
@@ -486,7 +506,10 @@ export function buildChapterHTML(chapter: ChapterFour): string {
         return `<p class="caption">${esc(block.caption)}</p><table${block.compact ? ' class="compact"' : ''}><thead>${
           htmlHead(block)
         }</thead><tbody>${
-          block.rows.map(r => `<tr>${r.map(c => `<td${c.bold ? ' class="b"' : ''}>${esc(c.text)}</td>`).join('')}</tr>`).join('')
+          block.rows.map((r, i) => `<tr>${r.map((c, col) => {
+            if (!block.mergeDown?.includes(col)) return `<td${c.bold ? ' class="b"' : ''}>${esc(c.text)}</td>`;
+            return i === 0 ? `<td rowspan="${block.rows.length}" class="b merged">${esc(c.text)}</td>` : '';
+          }).join('')}</tr>`).join('')
         }</tbody></table>${block.note ? `<p class="note">${esc(block.note)}</p>` : ''}`;
       case 'figure': {
         const png = renderPiePNG(block.slices, block.legendTitle);
@@ -513,7 +536,7 @@ export function buildChapterHTML(chapter: ChapterFour): string {
   table { border-collapse: collapse; width: 100%; margin: 0 0 12px; font-size: 11pt; line-height: 1.3; }
   th, td { border: 1px solid #000; padding: 4px 6px; text-align: left; vertical-align: top; }
   th, td.b { font-weight: bold; }
-  th.group { text-align: center; }
+  th.group, td.merged { text-align: center; vertical-align: middle; }
   table.compact { font-size: 8pt; line-height: 1.1; }
   table.compact th, table.compact td { padding: 1px 5px; }
   .note { font-size: 10pt; font-style: italic; }
